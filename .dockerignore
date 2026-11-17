@@ -1,0 +1,21 @@
+# Deny everything by default, including .env*, .git, data, .venv, caches,
+# tests, credentials and any other local files. Only these files enter the build.
+**
+!Dockerfile
+!.dockerignore
+!requirements.txt
+!constraints.txt
+!cleaning.py
+!config.py
+!errors.py
+!generator.py
+!llm_prompt.py
+!llm_provider.py
+!main.py
+!manage.py
+!query_executor.py
+!query_service.py
+!schemas.py
+!sql_policy.py
+!storage.py
+!views.sql
