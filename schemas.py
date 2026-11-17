@@ -50,6 +50,7 @@ class ErrorCode(str, Enum):
     AMBIGUOUS_QUESTION = "ambiguous_question"
     INVALID_LLM_RESPONSE = "invalid_llm_response"
     SQL_POLICY_VIOLATION = "sql_policy_violation"
+    QUERY_RESOURCE_LIMIT = "query_resource_limit"
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     PROVIDER_TIMEOUT = "provider_timeout"
     SERVICE_NOT_READY = "service_not_ready"

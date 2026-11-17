@@ -58,6 +58,11 @@ class ProviderUnavailableError(AppError):
     public_message = "El proveedor no está disponible temporalmente. Inténtalo más tarde."
 
 
+class QueryResourceLimitError(InvalidLLMResponseError):
+    code = ErrorCode.QUERY_RESOURCE_LIMIT
+    public_message = "La consulta supera el presupuesto de ejecución o el tamaño permitido."
+
+
 class ProviderTimeoutError(AppError):
     status_code = 504
     code = ErrorCode.PROVIDER_TIMEOUT
@@ -146,7 +151,7 @@ def install_error_handlers(app: FastAPI) -> None:
 
 ERROR_RESPONSES = {
     422: {"model": ErrorResponse, "description": "Entrada inválida, pregunta fuera de alcance o ambigua."},
-    502: {"model": ErrorResponse, "description": "Respuesta del LLM inválida o SQL que incumple la política."},
+    502: {"model": ErrorResponse, "description": "Respuesta del LLM inválida, SQL fuera de política o presupuesto excedido."},
     503: {"model": ErrorResponse, "description": "Proveedor temporalmente no disponible o servicio aún no configurado."},
     504: {"model": ErrorResponse, "description": "Timeout del proveedor."},
     500: {"model": ErrorResponse, "description": "Fallo interno; mensaje público genérico."},

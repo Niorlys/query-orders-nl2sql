@@ -2,11 +2,14 @@
 
 Demo de pedidos y consultas en lenguaje natural. Incluye el generador reproducible
 y funciones de normalización y clasificación independientes de la base de datos,
-con carga a SQLite y vistas de ventas desde la CLI. FastAPI se implementará después.
+con carga a SQLite, vistas de ventas, contratos de FastAPI y un ejecutor SQL
+validado de solo lectura. La conexión al LLM y la integración del ejecutor con
+el endpoint todavía no están implementadas.
 
 ## Generar datos
 
-Requiere Python 3.10 o superior. El generador usa únicamente la biblioteca
+Requiere Python 3.11 o superior para todas las etapas, incluidos los límites de
+SQLite del ejecutor. El generador usa únicamente la biblioteca
 estándar y no necesita una API key ni llamadas a OpenAI.
 
 ```bash
@@ -328,6 +331,220 @@ Verifican totales exactos, meses de finalización, separación de años, exclusi
 de no ventas, homónimos, desempates, límite de diez, ausencia de ventas,
 repetibilidad y rollback ante fallos en las vistas.
 
+## API: contratos y errores
+
+La aplicación está en `main.py`; los modelos Pydantic en `schemas.py` y las
+excepciones y manejadores centralizados en `errors.py`. Para iniciarla:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m uvicorn main:app --reload
+```
+
+Documentación interactiva en [Swagger UI](http://127.0.0.1:8000/docs) y esquema en
+[OpenAPI](http://127.0.0.1:8000/openapi.json). No hace falta una API key para esta
+etapa: no se llama al proveedor ni se abre SQLite desde el endpoint.
+
+`POST /query` recibe `QueryRequest`:
+
+```json
+{"question": "¿Cuánto vendimos en España en marzo de 2025?"}
+```
+
+La pregunta debe ser texto y tener entre 1 y 1.000 caracteres **después de quitar
+espacios exteriores**. Se rechazan preguntas vacías, solo espacios, valores de
+otro tipo y campos adicionales. No se adivina la intención de la pregunta en
+esta etapa: fuera de alcance y ambigüedad tienen contratos de error preparados
+para cuando se conecte el servicio.
+
+El contrato de éxito `QueryResponse` es:
+
+```json
+{
+  "columns": ["importe_total_centavos"],
+  "rows": [[24000]],
+  "truncated": false
+}
+```
+
+Este es un ejemplo del formato, no un resultado que el endpoint calcule todavía.
+Cada fila debe tener exactamente tantas celdas como columnas. Las celdas pueden
+ser texto, entero, número finito, booleano o `null`; no se admiten objetos, listas,
+fechas Python, bytes, `Decimal`, `NaN` ni infinitos. `truncated` es un booleano
+obligatorio que indica si el ejecutor omitió filas por límites de cantidad o
+tamaño. El ejecutor ya implementa esos límites, pero aún no está conectado al
+endpoint HTTP.
+
+Todos los errores usan `ErrorResponse`, construido con Pydantic y serializado
+con `model_dump(mode="json")` mediante una única función que devuelve
+`JSONResponse`. Su estructura es siempre `code`, `message` y `details`:
+
+```json
+{
+  "code": "invalid_input",
+  "message": "La entrada no es válida. Revisa los campos indicados.",
+  "details": [
+    {
+      "location": ["body", "question"],
+      "code": "string_too_short",
+      "message": "La pregunta no puede estar vacía."
+    }
+  ]
+}
+```
+
+| HTTP | Código | Excepción / condición |
+| --- | --- | --- |
+| 422 | `invalid_input` | `InvalidInputError` o validación de la petición |
+| 422 | `out_of_scope` | `OutOfScopeError` |
+| 422 | `ambiguous_question` | `AmbiguousQuestionError` |
+| 502 | `invalid_llm_response` | `InvalidLLMResponseError` |
+| 502 | `sql_policy_violation` | `SQLPolicyViolationError`: SQL generado fuera de la política |
+| 502 | `query_resource_limit` | `QueryResourceLimitError`: presupuesto de ejecución o tamaño excedido |
+| 503 | `provider_unavailable` | `ProviderUnavailableError` |
+| 504 | `provider_timeout` | `ProviderTimeoutError` |
+| 500 | `internal_error` | `InternalServerError`, excepción inesperada o respuesta interna mal formada |
+| 503 | `service_not_ready` | Servicio de consultas aún no conectado en esta etapa |
+| 404 / 405 y otros | `http_error` | Errores HTTP del framework con el mismo formato |
+
+Las excepciones concretas heredan de `AppError`. Sus mensajes públicos son
+controlados; los diagnósticos internos no se devuelven al cliente. Los errores
+500 siempre tienen el mensaje genérico `Ocurrió un error interno inesperado.`
+La validación no devuelve los valores recibidos ni el cuerpo completo de la
+petición. `HTTPException` conserva su estado y cabeceras (por ejemplo, `Allow`
+en un 405), pero no expone su `detail` arbitrario. Los estados HTTP 422, 502,
+503 y 504 se asignan a sus códigos correspondientes en la tabla; otros 5xx
+usan `internal_error`. Los fallos inesperados se registran en el servidor.
+
+Una respuesta del LLM identificada como inválida será **502**; una respuesta
+interna que viole `QueryResponse` es un fallo de implementación y devuelve
+**500**. El futuro adaptador del proveedor deberá traducir sus fallos a las
+excepciones concretas; un `TimeoutError` sin clasificar sigue siendo inesperado.
+
+Para probar la entrada inválida y el estado actual del servicio:
+
+```bash
+curl -i http://127.0.0.1:8000/query -H 'Content-Type: application/json' -d '{"question":"   "}'
+curl -i http://127.0.0.1:8000/query -H 'Content-Type: application/json' -d '{"question":"Ventas de 2025"}'
+```
+
+La primera llamada devuelve 422; la segunda devuelve **503 `service_not_ready`**.
+Esto no indica una caída de OpenAI: el servicio aún no está configurado. Los
+casos de éxito y errores del proveedor se prueban sustituyendo la dependencia
+`get_query_service` con funciones simuladas, sin red ni SQL. La documentación
+OpenAPI incluye `QueryRequest`, `QueryResponse` y `ErrorResponse` para todas las
+categorías, reemplazando también el esquema 422 predeterminado de FastAPI.
+
+```bash
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest tests/test_api.py -v
+```
+
+Se prueban códigos HTTP, formato Pydantic, entradas inválidas, límites de longitud,
+escalares JSON, coherencia de filas, mensajes genéricos, errores 404/405,
+cabeceras HTTP, revalidación de respuestas y el esquema OpenAPI.
+Referencias de implementación: [manejo de errores de FastAPI](https://fastapi.tiangolo.com/tutorial/handling-errors/),
+[respuestas adicionales en OpenAPI](https://fastapi.tiangolo.com/advanced/additional-responses/)
+y [modo estricto de Pydantic](https://docs.pydantic.dev/latest/concepts/strict_mode/).
+
+## Validación y ejecución segura de SQL
+
+`sql_policy.py` valida el SQL sin abrir una base ni depender del endpoint.
+Usa SQLGlot con dialecto SQLite y recorre **todo el árbol sintáctico**, incluidas
+subconsultas escalares, `FROM`, `IN`, `EXISTS` y relaciones de los joins.
+`query_executor.py` vuelve a validar siempre antes de abrir su propia conexión.
+
+La política es explícita y cerrada:
+
+- Una sola sentencia `SELECT`, con relaciones sin prefijo de base: `pedidos`,
+  `ventas_por_mes_pais` y `top_10_clientes`. Se permiten alias y subconsultas.
+- Se admiten filtros, comparaciones, aritmética básica, `DISTINCT`, agrupación,
+  `HAVING`, orden, `LIMIT`, `OFFSET` y joins INNER, LEFT y CROSS.
+- Funciones: `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `ROUND`, `ABS`, `COALESCE`,
+  `NULLIF`, `LOWER`, `UPPER`, `LENGTH`, `SUBSTR`/`SUBSTRING`, `STRFTIME` y `DATE`.
+  También se permite el operador `LIKE`, que SQLite autoriza como función.
+- Se rechazan CTE (incluidas recursivas), UNION/INTERSECT/EXCEPT, ventanas, CASE,
+  CAST, parámetros, funciones de tabla y cualquier nodo fuera de la lista.
+  También escrituras, DDL, transacciones, `ATTACH`, `DETACH`, `PRAGMA`, tablas
+  internas (`sqlite_master`, etc.), `pedidos_rechazados` y `pedidos_duplicados`.
+- El texto se limita a 16.384 bytes UTF-8, el árbol a 500 nodos y su profundidad
+  a 50. SQLGlot está fijado a la versión probada para controlar cambios del parser.
+
+El SQL original validado se entrega a SQLite sin reescribirlo. Un error de
+sintaxis SQLite o una columna inexistente produce `InvalidLLMResponseError`
+(502); el validador no promete comprobar la existencia de todas las columnas.
+
+La ejecución aplica capas independientes:
+
+1. URI local escapada con `mode=ro`: una base inexistente no se crea. Se activa
+   `query_only` y se desactiva `trusted_schema` antes de recibir SQL no confiable.
+2. Authorizer con **denegación por defecto**: solo permite SELECT, lecturas de
+   relaciones autorizadas y las funciones admitidas. Reconoce las dos vistas
+   y permite sus lecturas de `pedidos`; el nombre de una vista autorizada no
+   concede acceso a tablas prohibidas. Deniega incluso PRAGMA de lectura.
+3. `set_progress_handler` interrumpe consultas al alcanzar el presupuesto de
+   instrucciones o tiempo. También se comprueba el tiempo al recoger resultados.
+4. Se recogen filas de una en una y se consulta como máximo una adicional para
+   detectar truncamiento, independientemente de `LIMIT 100000` o `LIMIT -1`.
+5. Se limita el JSON completo en bytes UTF-8: columnas, filas, signos y
+   `truncated`. Se omiten filas completas, sin cortar celdas. Si la primera fila
+   no cabe, devuelve `rows: []` y `truncated: true`; si ni los metadatos caben,
+   devuelve un error de recursos. Nunca se permite BLOB ni números no finitos.
+
+Valores predeterminados de `ExecutionLimits`:
+
+| Límite | Valor |
+| --- | ---: |
+| Filas devueltas | 100 |
+| Respuesta JSON | 65.536 bytes |
+| Instrucciones aproximadas de la máquina virtual | 200.000 |
+| Tiempo de ejecución | 1 segundo |
+| Intervalo del progress handler | 1.000 instrucciones |
+| Valor/fila interno de SQLite | 1.048.576 bytes |
+
+Además se limitan las columnas SQL a 50 y las bases adjuntas a cero. El límite
+de tiempo es cooperativo, comprobado en los callbacks y entre filas; no es una
+interrupción de proceso de precisión exacta. El límite del JSON tampoco es una
+cuota global de memoria del proceso: SQLite puede necesitar memoria de trabajo
+para agrupar u ordenar antes de producir resultados.
+
+Agotar instrucciones, tiempo o tamaños internos provoca `query_resource_limit`
+(502), sin resultados parciales. Un límite de filas o bytes de resultados
+devuelve `QueryResponse` con `truncated: true`. No se usa 504 para el presupuesto
+SQL: ese estado queda reservado al timeout del proveedor. Fallos de infraestructura
+de SQLite se clasifican como internos (500). Cada ejecución cierra su conexión.
+
+Para probar el ejecutor directamente, sin LLM y sin modificar el endpoint:
+
+```bash
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python - <<'PY'
+from pathlib import Path
+from query_executor import execute_query, ExecutionLimits
+
+result = execute_query(
+    "SELECT * FROM ventas_por_mes_pais ORDER BY anio_mes, país",
+    Path("data/processed/pedidos.sqlite3"),
+    limits=ExecutionLimits(max_rows=10),
+)
+print(result.model_dump_json(indent=2))
+PY
+```
+
+Las pruebas usan una base temporal con el fixture conocido. Verifican consultas
+legítimas, referencias anidadas prohibidas, authorizer sin pasar por el parser,
+vistas alteradas con dependencias prohibidas, protección de solo lectura, límites
+de filas y JSON multibyte, y la interrupción real de un producto cartesiano costoso:
+
+```bash
+.venv/bin/python -m pytest tests/test_query_executor.py -v
+```
+
+Referencias: [AST y parser de SQLGlot](https://sqlglot.com/sqlglot.html),
+[authorizer de SQLite](https://www.sqlite.org/c3ref/set_authorizer.html) y
+[conexiones, límites y progress handler de Python](https://docs.python.org/3.13/library/sqlite3.html).
+
 ## Verificación
 
 ```bash
@@ -342,8 +559,10 @@ solapamientos, las causas de rechazo y la coherencia de fechas y estados
 con varias semillas. `tests/test_cleaning.py` prueba normalización, fechas completas
 e imposibles, céntimos exactos, importes inválidos, duplicados, conflictos de ID,
 reglas de estado y múltiples motivos por fila. También contrasta la clasificación
-con el manifiesto del generador para varias semillas. Los tests de validación SQL
-y endpoint con LLM simulado acompañarán esas etapas cuando se implementen.
+con el manifiesto del generador para varias semillas. Los tests del endpoint con
+LLM simulado acompañarán la integración real del proveedor.
+Las pruebas actuales del endpoint simulan el servicio de consultas completo y
+verifican los contratos y errores, sin generar SQL.
 `tests/test_storage.py` ejecuta la CLI contra bases temporales y comprueba
 persistencia, auditoría, céntimos enteros, repetición sin duplicados y rollback
 ante fallos de escritura, además de errores de entrada claros.
@@ -407,8 +626,8 @@ etapa. Los importes se generan desde centavos enteros, evitando errores de coma
 flotante. El manifiesto permite auditar errores sin mezclar datos crudos con
 resultados de procesamiento.
 
-Los siguientes pasos son implementar validación
-de consultas de solo lectura y FastAPI con OpenAI. Con más tiempo se añadirían
+Los siguientes pasos son conectar el servicio de FastAPI con OpenAI y con el
+ejecutor validado de solo lectura. Con más tiempo se añadirían
 estacionalidad, cantidades por producto, descuentos y un modelo separado de
 devoluciones y cobros.
 
@@ -432,3 +651,12 @@ Para las vistas se pidió respetar ventas completadas y comprobar los totales a
 mano. Se añadió un ID de cliente independiente del nombre, se definieron
 desempates explícitos y se verificaron los resultados con un CSV pequeño fijo,
 incluyendo homónimos, cambios de mes y un empate en el corte del top 10.
+Para la API se pidió definir contratos y errores antes de ejecutar SQL. Se
+creó `main.py` como entrada, con modelos estrictos, excepciones concretas y
+serialización centralizada. Se comprobaron los estados y cuerpos mediante
+dependencias simuladas y se documentó explícitamente el 503 provisional del
+servicio todavía no conectado.
+Después se pidió construir la ejecución segura. Se implementaron validación por
+AST, authorizer cerrado, conexión de solo lectura y presupuestos de recursos.
+Se comprobó cada capa por separado, incluyendo pruebas que omiten el validador
+para verificar que SQLite también impide accesos y escrituras no autorizados.
