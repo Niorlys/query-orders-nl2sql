@@ -14,7 +14,7 @@ START_DATE = date(2024, 1, 1)
 END_DATE = date(2025, 12, 15)
 FIELD_NAMES = (
     "pedido_id", "fecha", "fecha_completado", "cliente", "país",
-    "producto", "importe", "moneda", "estado",
+    "producto", "importe", "moneda", "estado", "cliente_id",
 )
 COUNTRY_VARIANTS = {
     "España": ("espana", "ESPAÑA", " España "),
@@ -38,7 +38,7 @@ def generate_dataset(seed: int = DEFAULT_SEED) -> tuple[list[dict], dict]:
     duplicate_count = rng.randint(0, 40)
     invalid_date_count = rng.randint(0, 40)
     empty_amount_count = rng.randint(0, 10)
-    customers = [(f"Cliente {index:03d}", rng.choice(tuple(COUNTRY_VARIANTS)))
+    customers = [(str(index), f"Cliente {index:03d}", rng.choice(tuple(COUNTRY_VARIANTS)))
                  for index in range(1, 121)]
     rows = []
     for order_id in range(1, original_count + 1):
@@ -50,7 +50,7 @@ def generate_dataset(seed: int = DEFAULT_SEED) -> tuple[list[dict], dict]:
         )[0]
         completed_date = (created_date + timedelta(days=rng.randint(0, 14))
                           if status == "completado" else None)
-        customer, country = rng.choice(customers)
+        customer_id, customer, country = rng.choice(customers)
         product, amount_cents = rng.choice(PRODUCTS)
         rows.append({
             "pedido_id": str(order_id),
@@ -58,7 +58,7 @@ def generate_dataset(seed: int = DEFAULT_SEED) -> tuple[list[dict], dict]:
             "fecha_completado": completed_date.isoformat() if completed_date else "",
             "cliente": customer, "país": country, "producto": product,
             "importe": f"{amount_cents // 100}.{amount_cents % 100:02d}",
-            "moneda": "USD", "estado": status,
+            "moneda": "USD", "estado": status, "cliente_id": customer_id,
         })
     errors = []
 

@@ -10,13 +10,15 @@ from cleaning import RAW_FIELDS, ClassifiedRow, classify_rows, summarize_rows
 
 
 DEFAULT_DATABASE_PATH = Path(__file__).resolve().parent / "data" / "processed" / "pedidos.sqlite3"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+VIEWS_PATH = Path(__file__).resolve().parent / "views.sql"
 SCHEMA_STATEMENTS = (
     """CREATE TABLE IF NOT EXISTS pedidos (
         pedido_id INTEGER NOT NULL PRIMARY KEY
             CHECK (typeof(pedido_id) = 'integer' AND pedido_id > 0),
         fecha TEXT NOT NULL CHECK (length(trim(fecha)) > 0),
         fecha_completado TEXT,
+        cliente_id INTEGER NOT NULL CHECK (typeof(cliente_id) = 'integer' AND cliente_id > 0),
         cliente TEXT NOT NULL CHECK (length(trim(cliente, char(9) || char(10) || char(13) || ' ')) > 0),
         país TEXT NOT NULL CHECK (país IN ('España', 'México', 'Argentina', 'Colombia', 'Chile', 'Estados Unidos')),
         producto TEXT NOT NULL CHECK (length(trim(producto, char(9) || char(10) || char(13) || ' ')) > 0),
@@ -51,7 +53,10 @@ def read_csv_rows(input_path: Path) -> list[dict]:
         reader = csv.DictReader(source, restkey="__extra_columns__", strict=True)
         headers = reader.fieldnames
         if not headers or len(headers) != len(RAW_FIELDS) or set(headers) != RAW_FIELDS:
-            raise ValueError("El CSV debe tener exactamente las columnas del generador, sin repetirlas.")
+            raise ValueError(
+                "El CSV debe tener exactamente las columnas del generador, incluido cliente_id, "
+                "sin repetirlas. Regenera el CSV de la demo con 'python3 manage.py generate'."
+            )
         return list(reader)
 
 
@@ -59,9 +64,25 @@ def encode_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
+def create_views(connection: sqlite3.Connection, script: str) -> None:
+    # executescript() can commit a pending transaction; execute each statement instead.
+    statement = ""
+    for line in script.splitlines(keepends=True):
+        statement += line
+        if sqlite3.complete_statement(statement):
+            connection.execute(statement)
+            statement = ""
+    if statement.strip():
+        raise ValueError("views.sql contiene una sentencia incompleta.")
+    # SQLite can create a view with unresolved columns; prepare both queries now.
+    connection.execute("SELECT * FROM ventas_por_mes_pais LIMIT 0")
+    connection.execute("SELECT * FROM top_10_clientes LIMIT 0")
+
+
 def save_sqlite(records: list[ClassifiedRow], database_path: Path) -> dict:
     """Replace this dataset's three tables atomically; retain the old data on failure."""
     summary = summarize_rows(records)
+    views_script = VIEWS_PATH.read_text(encoding="utf-8")
     database_path = Path(database_path)
     database_path.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(database_path)) as connection:
@@ -69,10 +90,12 @@ def save_sqlite(records: list[ClassifiedRow], database_path: Path) -> dict:
             # Explicit BEGIN also includes schema creation in the transaction.
             connection.execute("BEGIN IMMEDIATE")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, SCHEMA_VERSION):
+            if version not in (0, 1, SCHEMA_VERSION):
                 raise ValueError(f"Versión de esquema SQLite no compatible: {version}")
-            if version == 0:
+            if version < SCHEMA_VERSION:
                 # Upgrade the earlier demo schema during the same full replacement.
+                connection.execute("DROP VIEW IF EXISTS top_10_clientes")
+                connection.execute("DROP VIEW IF EXISTS ventas_por_mes_pais")
                 connection.execute("DROP TABLE IF EXISTS pedidos_duplicados")
                 connection.execute("DROP TABLE IF EXISTS pedidos_rechazados")
                 connection.execute("DROP TABLE IF EXISTS pedidos")
@@ -87,11 +110,11 @@ def save_sqlite(records: list[ClassifiedRow], database_path: Path) -> dict:
                     values = record.normalized
                     connection.execute(
                         """INSERT INTO pedidos (
-                            pedido_id, fecha, fecha_completado, cliente, país, producto,
+                            pedido_id, fecha, fecha_completado, cliente_id, cliente, país, producto,
                             importe_centavos, moneda, estado, row_number, original_json
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (int(values["pedido_id"]), values["fecha"], values["fecha_completado"],
-                         values["cliente"], values["país"], values["producto"],
+                         int(values["cliente_id"]), values["cliente"], values["país"], values["producto"],
                          values["importe_centavos"], values["moneda"], values["estado"],
                          record.row_number, encode_json(record.original)),
                     )
@@ -109,6 +132,7 @@ def save_sqlite(records: list[ClassifiedRow], database_path: Path) -> dict:
                         )
                 else:
                     raise ValueError(f"Categoría desconocida: {record.category}")
+            create_views(connection, views_script)
             stored_counts = {
                 "accepted": connection.execute("SELECT COUNT(*) FROM pedidos").fetchone()[0],
                 "rejected": connection.execute("SELECT COUNT(*) FROM pedidos_rechazados").fetchone()[0],

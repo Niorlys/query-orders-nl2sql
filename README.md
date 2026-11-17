@@ -2,7 +2,7 @@
 
 Demo de pedidos y consultas en lenguaje natural. Incluye el generador reproducible
 y funciones de normalización y clasificación independientes de la base de datos,
-con carga a SQLite desde la CLI. Las vistas y FastAPI se implementarán después.
+con carga a SQLite y vistas de ventas desde la CLI. FastAPI se implementará después.
 
 ## Generar datos
 
@@ -36,10 +36,15 @@ Python, ya que los algoritmos auxiliares de `random` pueden cambiar.
 ## Datos y criterio de ventas
 
 Columnas: `pedido_id`, `fecha`, `fecha_completado`, `cliente`, `país`, `producto`,
-`importe`, `moneda` y `estado`. Las variables y funciones están en inglés;
+`importe`, `moneda`, `estado` y `cliente_id`. Las variables y funciones están en inglés;
 las columnas y los estados del dominio se mantienen en español.
 Cada pedido tiene un producto, importe con dos decimales y moneda `USD`.
-Hay 120 clientes sintéticos con país estable y seis productos con precio fijo.
+Hay 120 clientes sintéticos con ID y país estables y seis productos con precio fijo.
+`cliente_id` es independiente del nombre: dos personas con el mismo nombre pueden
+tener IDs diferentes. Los CSV de la versión anterior deben regenerarse con
+`python3 manage.py generate` para incorporar esta columna; no se infiere el ID
+a partir del nombre. Los conteos de pedidos y errores de la semilla predeterminada
+se mantienen, pero el hash del CSV cambia al añadir la columna.
 Los estados se sortean con pesos de 20% pendiente, 70% completado y 10% cancelado;
 son probabilidades, no cuotas exactas.
 
@@ -141,7 +146,7 @@ Motivos de rechazo (una fila puede tener varios):
 incluido con Python, por lo que no se requiere un servidor ni otra dependencia.
 Las tablas son:
 
-- `pedidos`: pedidos aceptados de los tres estados, importe en céntimos enteros,
+- `pedidos`: pedidos aceptados de los tres estados, ID y nombre del cliente, importe en céntimos enteros,
   número de fila y datos originales en `original_json`.
 - `pedidos_rechazados`: número de fila, originales, datos normalizados y todos
   los motivos en columnas JSON de texto.
@@ -155,7 +160,7 @@ Las restricciones de SQLite exigen IDs positivos y únicos, campos obligatorios
 no nulos ni vacíos, céntimos enteros positivos, países del catálogo, moneda USD
 y estados permitidos. También comprueban la coherencia entre estado y fecha de
 finalización. Las filas de auditoría requieren número de fila válido y datos y
-motivos presentes. El esquema inicial de la demo se actualiza automáticamente
+motivos presentes. Los esquemas anteriores de la demo se actualizan automáticamente
 en la primera carga con estas restricciones, dentro de la misma transacción;
 si falla, se recuperan tanto los datos como el esquema anterior.
 Repetir el comando con el mismo CSV no duplica pedidos. El CSV original no se
@@ -216,7 +221,8 @@ Reglas de normalización y validación:
   requiere USD y limita los céntimos al rango entero positivo de 64 bits.
 - `pedido_id` es un entero positivo de hasta 64 bits representado como texto
   canónico: ` 001 ` y `1` identifican el mismo pedido. IDs inválidos se rechazan
-  individualmente. Cliente y producto son obligatorios; columnas faltantes o
+  individualmente. `cliente_id` requiere el mismo formato, pero puede aparecer en
+  varios pedidos y no se usa para deduplicarlos. Cliente y producto son obligatorios; columnas faltantes o
   adicionales se registran como problemas de esquema.
 
 Las categorías son **excluyentes**, aplicando esta prioridad:
@@ -251,6 +257,76 @@ del proyecto es conservar los datos originales y separar errores de calidad,
 sin imputar fechas o importes. El escalado estadístico, los modelos predictivos
 y el descarte automático de valores atípicos no son necesarios para esta tarea.
 Un importe alto válido no se rechaza solo por ser inusual.
+
+## Vistas de ventas
+
+`views.sql` define las dos vistas y se ejecuta automáticamente en cada
+`python3 manage.py clean`, dentro de la misma transacción que reemplaza los datos.
+Si falla el SQL o alguna vista referencia una columna inexistente, se recuperan
+los datos y las vistas anteriores. El cargador ejecuta las sentencias por separado
+para evitar el commit implícito que puede realizar `executescript()`.
+
+Ambas vistas incluyen solo `estado = 'completado'` y `moneda = 'USD'`. Los
+importes se mantienen en **céntimos enteros** (`importe_total_centavos`), sin
+convertirlos a `float` ni mezclar monedas. Cancelados y pendientes siguen en
+`pedidos`, pero no suman ventas ni participan en el ranking.
+
+- `ventas_por_mes_pais`: `anio_mes` (`YYYY-MM` de `fecha_completado`), `país`,
+  `numero_pedidos`, `importe_total_centavos` y `moneda`. Distingue años; un pedido
+  creado en marzo y entregado en abril pertenece a abril.
+- `top_10_clientes`: `cliente_id`, `nombre`, `numero_pedidos`,
+  `importe_total_centavos` y `moneda`. Agrupa por ID, no por nombre. Si un mismo
+  ID aparece con nombres distintos, muestra el menor según orden `BINARY`
+  (`MIN(cliente)`), sin dividir ni duplicar su total. Esto es una regla de
+  presentación del demo, no una elección de cuál es el nombre más reciente.
+
+El top 10 prioriza **importe total descendente**, luego **número de pedidos
+descendente** y finalmente **ID numérico ascendente**. El desempate también se
+aplica al seleccionar el décimo cliente. El `ORDER BY` dentro de la vista sirve
+para elegir esos diez; las consultas deben incluir su propio `ORDER BY` cuando
+importe el orden de presentación:
+
+```bash
+sqlite3 -header -column data/processed/pedidos.sqlite3 "SELECT * FROM ventas_por_mes_pais ORDER BY anio_mes, país;"
+sqlite3 -header -column data/processed/pedidos.sqlite3 "SELECT * FROM top_10_clientes ORDER BY importe_total_centavos DESC, numero_pedidos DESC, cliente_id ASC;"
+```
+
+### Comprobación manual con datos conocidos
+
+El archivo versionado `tests/fixtures/orders_views.csv` contiene 19 filas pequeñas.
+Para probarlo sin reemplazar tu base habitual:
+
+```bash
+python3 manage.py clean --input tests/fixtures/orders_views.csv --database /tmp/pedidos-vistas-demo.sqlite3
+sqlite3 -header -column /tmp/pedidos-vistas-demo.sqlite3 "SELECT * FROM ventas_por_mes_pais ORDER BY anio_mes, país;"
+sqlite3 -header -column /tmp/pedidos-vistas-demo.sqlite3 "SELECT * FROM top_10_clientes ORDER BY importe_total_centavos DESC, numero_pedidos DESC, cliente_id ASC;"
+```
+
+La carga debe producir 16 aceptadas, 2 rechazadas (fecha imposible y moneda EUR)
+y 1 duplicada. Las aceptadas incluyen 1 cancelada y 1 pendiente. Totales esperados:
+
+| Año-mes | País | Pedidos completados | Total en céntimos USD |
+| --- | --- | ---: | ---: |
+| 2024-03 | España | 1 | 500 |
+| 2025-03 | España | 11 | 24.000 |
+| 2025-03 | México | 1 | 15.000 |
+| 2025-04 | España | 1 | 10.000 |
+
+España en marzo de 2025 suma 50 + 100 + nueve pedidos de 10 = **240 USD**.
+El pedido de 100 USD creado el 31 de marzo y entregado el 2 de abril suma en
+abril. El ranking empieza por ID 2 (Ana, 2 pedidos, 150 USD), ID 1 (Bruno,
+1 pedido, 150 USD) e ID 3 (otra Ana, 2 pedidos, 105 USD). Les siguen los IDs
+4 a 10 con 10 USD cada uno; los IDs 11 y 12 quedan fuera por el desempate.
+
+Pruebas automáticas de estas vistas:
+
+```bash
+.venv/bin/python -m pytest tests/test_views.py -v
+```
+
+Verifican totales exactos, meses de finalización, separación de años, exclusión
+de no ventas, homónimos, desempates, límite de diez, ausencia de ventas,
+repetibilidad y rollback ante fallos en las vistas.
 
 ## Verificación
 
@@ -331,7 +407,7 @@ etapa. Los importes se generan desde centavos enteros, evitando errores de coma
 flotante. El manifiesto permite auditar errores sin mezclar datos crudos con
 resultados de procesamiento.
 
-Los siguientes pasos son implementar vistas SQL, validación
+Los siguientes pasos son implementar validación
 de consultas de solo lectura y FastAPI con OpenAI. Con más tiempo se añadirían
 estacionalidad, cantidades por producto, descuentos y un modelo separado de
 devoluciones y cobros.
@@ -352,3 +428,7 @@ de calidad y consistencia; no se incorporaron técnicas de imputación.
 Después se pidió conectar la limpieza con la CLI y SQLite. Se implementaron
 tablas separadas de pedidos y auditoría, reemplazo transaccional de la carga y
 tests de integración que verifican los registros realmente almacenados.
+Para las vistas se pidió respetar ventas completadas y comprobar los totales a
+mano. Se añadió un ID de cliente independiente del nombre, se definieron
+desempates explícitos y se verificaron los resultados con un CSV pequeño fijo,
+incluyendo homónimos, cambios de mes y un empate en el corte del top 10.

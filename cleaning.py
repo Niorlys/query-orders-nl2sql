@@ -24,7 +24,7 @@ COUNTRY_ALIASES = {
 STATUSES = {"pendiente", "completado", "cancelado"}
 RAW_FIELDS = {
     "pedido_id", "fecha", "fecha_completado", "cliente", "país",
-    "producto", "importe", "moneda", "estado",
+    "producto", "importe", "moneda", "estado", "cliente_id",
 }
 DATE_FORMATS = (
     (r"[0-9]{4}-[0-9]{2}-[0-9]{2}", "%Y-%m-%d"),
@@ -65,6 +65,13 @@ def normalize_order_id(value: str | None) -> str:
     if not digits or len(digits) > 19 or int(digits) > MAX_INTEGER:
         raise ValueError("invalid_order_id")
     return str(int(digits))
+
+
+def normalize_customer_id(value: str | None) -> str:
+    try:
+        return normalize_order_id(value)
+    except ValueError:
+        raise ValueError("invalid_customer_id") from None
 
 
 def parse_date(value: str | None) -> str:
@@ -123,6 +130,7 @@ def normalize_row(row: Mapping[str, str | None], row_number: int) -> NormalizedR
 
     parsers = {
         "pedido_id": normalize_order_id, "país": normalize_country,
+        "cliente_id": normalize_customer_id,
         "estado": normalize_status, "fecha": parse_date, "importe": parse_amount_cents,
     }
     for field, parser in parsers.items():
