@@ -1,4 +1,4 @@
-"""Bounded, read-only SQLite execution. Not connected to the HTTP endpoint yet."""
+"""Bounded, read-only SQLite execution used by the query service."""
 
 import json
 import math

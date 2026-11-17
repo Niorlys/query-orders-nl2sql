@@ -2,9 +2,8 @@
 
 Demo de pedidos y consultas en lenguaje natural. Incluye el generador reproducible
 y funciones de normalización y clasificación independientes de la base de datos,
-con carga a SQLite, vistas de ventas, contratos de FastAPI y un ejecutor SQL
-validado de solo lectura. La conexión al LLM y la integración del ejecutor con
-el endpoint todavía no están implementadas.
+con carga a SQLite, vistas de ventas y FastAPI conectado a OpenAI. El modelo
+propone SQL estructurado y el servidor lo valida y ejecuta en SQLite de solo lectura.
 
 ## Generar datos
 
@@ -334,17 +333,22 @@ repetibilidad y rollback ante fallos en las vistas.
 ## API: contratos y errores
 
 La aplicación está en `main.py`; los modelos Pydantic en `schemas.py` y las
-excepciones y manejadores centralizados en `errors.py`. Para iniciarla:
+excepciones y manejadores centralizados en `errors.py`. El endpoint se declara
+fuera de `create_app()` mediante un `APIRouter` en el mismo `main.py`; la fábrica
+solo configura la aplicación, registra los manejadores y añade el router. Esto
+permite crear aplicaciones independientes para los tests. Para iniciarla:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
+# Si todavía no existe .env, copia .env.example y completa OPENAI_API_KEY.
 .venv/bin/python -m uvicorn main:app --reload
 ```
 
 Documentación interactiva en [Swagger UI](http://127.0.0.1:8000/docs) y esquema en
-[OpenAPI](http://127.0.0.1:8000/openapi.json). No hace falta una API key para esta
-etapa: no se llama al proveedor ni se abre SQLite desde el endpoint.
+[OpenAPI](http://127.0.0.1:8000/openapi.json). Las consultas válidas requieren
+configuración del proveedor y una base generada/cargada con `manage.py`. La
+documentación, los tests y la validación de preguntas vacías no requieren credenciales.
 
 `POST /query` recibe `QueryRequest`:
 
@@ -354,9 +358,8 @@ etapa: no se llama al proveedor ni se abre SQLite desde el endpoint.
 
 La pregunta debe ser texto y tener entre 1 y 1.000 caracteres **después de quitar
 espacios exteriores**. Se rechazan preguntas vacías, solo espacios, valores de
-otro tipo y campos adicionales. No se adivina la intención de la pregunta en
-esta etapa: fuera de alcance y ambigüedad tienen contratos de error preparados
-para cuando se conecte el servicio.
+otro tipo y campos adicionales. El modelo puede declarar la pregunta fuera de
+alcance o ambigua; ambas decisiones devuelven 422 sin ejecutar SQL.
 
 El contrato de éxito `QueryResponse` es:
 
@@ -368,13 +371,12 @@ El contrato de éxito `QueryResponse` es:
 }
 ```
 
-Este es un ejemplo del formato, no un resultado que el endpoint calcule todavía.
+Este es un ejemplo del formato, con el total de marzo de España del fixture pequeño.
 Cada fila debe tener exactamente tantas celdas como columnas. Las celdas pueden
 ser texto, entero, número finito, booleano o `null`; no se admiten objetos, listas,
 fechas Python, bytes, `Decimal`, `NaN` ni infinitos. `truncated` es un booleano
 obligatorio que indica si el ejecutor omitió filas por límites de cantidad o
-tamaño. El ejecutor ya implementa esos límites, pero aún no está conectado al
-endpoint HTTP.
+tamaño. El endpoint usa siempre ese ejecutor para el SQL propuesto por el modelo.
 
 Todos los errores usan `ErrorResponse`, construido con Pydantic y serializado
 con `model_dump(mode="json")` mediante una única función que devuelve
@@ -405,7 +407,7 @@ con `model_dump(mode="json")` mediante una única función que devuelve
 | 503 | `provider_unavailable` | `ProviderUnavailableError` |
 | 504 | `provider_timeout` | `ProviderTimeoutError` |
 | 500 | `internal_error` | `InternalServerError`, excepción inesperada o respuesta interna mal formada |
-| 503 | `service_not_ready` | Servicio de consultas aún no conectado en esta etapa |
+| 503 | `service_not_ready` | Configuración ausente/inválida, credenciales, acceso o modelo no disponibles |
 | 404 / 405 y otros | `http_error` | Errores HTTP del framework con el mismo formato |
 
 Las excepciones concretas heredan de `AppError`. Sus mensajes públicos son
@@ -419,8 +421,9 @@ usan `internal_error`. Los fallos inesperados se registran en el servidor.
 
 Una respuesta del LLM identificada como inválida será **502**; una respuesta
 interna que viole `QueryResponse` es un fallo de implementación y devuelve
-**500**. El futuro adaptador del proveedor deberá traducir sus fallos a las
-excepciones concretas; un `TimeoutError` sin clasificar sigue siendo inesperado.
+**500**. El adaptador del proveedor traduce timeouts a 504 y fallos temporales
+a 503; los fallos HTTP 400/422 de configuración de la petición al proveedor
+son errores internos 500 y no se reintentan.
 
 Para probar la entrada inválida y el estado actual del servicio:
 
@@ -429,10 +432,11 @@ curl -i http://127.0.0.1:8000/query -H 'Content-Type: application/json' -d '{"qu
 curl -i http://127.0.0.1:8000/query -H 'Content-Type: application/json' -d '{"question":"Ventas de 2025"}'
 ```
 
-La primera llamada devuelve 422; la segunda devuelve **503 `service_not_ready`**.
-Esto no indica una caída de OpenAI: el servicio aún no está configurado. Los
-casos de éxito y errores del proveedor se prueban sustituyendo la dependencia
-`get_query_service` con funciones simuladas, sin red ni SQL. La documentación
+La primera llamada devuelve 422. La segunda consulta al modelo y ejecuta el SQL
+validado si el proveedor y SQLite están configurados; sin configuración devuelve
+503 `service_not_ready`. Los tests de contratos sustituyen `get_query_service`
+por funciones simuladas; los de integración simulan el transporte HTTP de OpenAI
+y usan SQLite real en archivos temporales. La documentación
 OpenAPI incluye `QueryRequest`, `QueryResponse` y `ErrorResponse` para todas las
 categorías, reemplazando también el esquema 422 predeterminado de FastAPI.
 
@@ -447,6 +451,101 @@ cabeceras HTTP, revalidación de respuestas y el esquema OpenAPI.
 Referencias de implementación: [manejo de errores de FastAPI](https://fastapi.tiangolo.com/tutorial/handling-errors/),
 [respuestas adicionales en OpenAPI](https://fastapi.tiangolo.com/advanced/additional-responses/)
 y [modo estricto de Pydantic](https://docs.pydantic.dev/latest/concepts/strict_mode/).
+
+## Proveedor LLM y reintentos
+
+`config.py` usa `pydantic-settings` para leer `.env` de la raíz del proyecto y las
+variables del proceso; estas últimas tienen prioridad. Sustituye la lectura y el
+mapa manual de variables por `BaseSettings`, conservando las validaciones. También
+permite construir `Settings` pasando parámetros directamente, que tienen prioridad
+sobre el entorno. No modifica el entorno ni muestra la API key. Configura
+los valores siguiendo `.env.example` (si ya tienes `.env`, añade las variables
+faltantes sin sobrescribir tu clave):
+
+| Variable | Valor predeterminado / significado |
+| --- | --- |
+| `OPENAI_API_KEY` | Obligatoria; solo en `.env` o en el entorno |
+| `OPENAI_MODEL` | `gpt-6-luna`, el modelo solicitado |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` |
+| `OPENAI_TIMEOUT_SECONDS` | 10 segundos por intento |
+| `OPENAI_TOTAL_TIMEOUT_SECONDS` | 30 segundos para todos los intentos y esperas |
+| `OPENAI_MAX_RETRIES` | 2 reintentos adicionales: máximo 3 intentos totales |
+| `APP_TIMEZONE` | `America/Mexico_City` |
+| `DATABASE_PATH` | `data/processed/pedidos.sqlite3`, relativa al proyecto |
+
+Una URL alternativa debe implementar Responses y Structured Outputs compatibles.
+El modelo [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)
+se identifica como `gpt-6-luna`. Se usa la API Responses con esfuerzo de razonamiento
+`low`, hasta 4.096 tokens de salida, sin herramientas y con `store=False`.
+
+`llm_prompt.py` proporciona el dialecto SQLite, columnas y relaciones de negocio
+permitidas, las funciones admitidas y las reglas de ventas completadas en USD.
+La pregunta se envía en un mensaje de usuario separado. No se envían filas de la
+base ni credenciales dentro del prompt. La fecha de referencia se calcula al
+recibir la consulta en `APP_TIMEZONE`; es independiente de la generación sintética.
+Los periodos relativos se resuelven con esa fecha. Un mes sin año ni referencia
+relativa explícita debe producir una pregunta ambigua, sin adivinar el año a partir
+del dataset. Los datos de la demo son de 2024–2025, por lo que preguntas relativas
+a periodos actuales pueden no encontrar ventas.
+
+`llm_provider.py` solicita [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)
+y valida otra vez con Pydantic el modelo `LLMDecision`. Todos los campos son obligatorios:
+
+```json
+{"status":"query","sql":"SELECT COUNT(*) AS pedidos FROM pedidos","reason":null}
+```
+
+```json
+{"status":"unanswerable","sql":null,"reason":"ambiguous"}
+```
+
+El otro motivo permitido es `out_of_scope`. Se rechazan campos adicionales,
+combinaciones contradictorias, SQL vacío, contenido no JSON, refusals y respuestas
+incompletas. Una decisión `query` pasa a `query_service.py` y de ahí siempre a
+`execute_query`, que valida el SQL antes de abrir SQLite. La ejecución se hace en
+un hilo para no bloquear el event loop. El nombre de una tabla permitido y una
+salida JSON válida no garantizan por sí solos que la interpretación del usuario
+sea correcta; las reglas de negocio se incluyen en el prompt y se comprueban con
+casos conocidos, mientras que las restricciones de acceso se imponen en código.
+
+### Política de reintentos
+
+Los reintentos **están activados en el adaptador**. El SDK se configura con
+`max_retries=0` únicamente para que no añada otros intentos ocultos. La política
+de la aplicación controla los intentos y el tiempo de extremo a extremo del proveedor:
+
+| Fallo | Comportamiento |
+| --- | --- |
+| Conexión temporal, HTTP 409 o 5xx | Reintentar hasta el límite y dentro del plazo total |
+| HTTP 429 | Respetar `Retry-After` o `retry-after-ms` si la espera cabe en el plazo |
+| Timeout de red/espera o HTTP 408 | Como máximo un reintento por timeout, dentro del límite general |
+| Credenciales/acceso incorrectos (401/403) o modelo/URL inexistentes (404) | No reintentar; 503 `service_not_ready` |
+| Fuera de alcance o ambigüedad | No reintentar; 422 |
+| Salida mal formada, refusal, respuesta incompleta o SQL rechazado | No reintentar ni pedir regeneración; 502 |
+
+Sin espera válida indicada por el proveedor, el backoff es 0,5 s, 1 s, 2 s y
+después hasta 4 s. Se aceptan segundos o una fecha HTTP en `Retry-After`.
+Si la espera indicada no cabe, no se acorta: termina con el último error sin
+hacer otro intento. Cada intento recibe el menor de su timeout configurado y el
+tiempo restante; también se aplica un límite asíncrono a toda esa espera. Los
+reintentos no reinician el plazo total. `OPENAI_MAX_RETRIES=0` permite desactivarlos.
+El presupuesto SQL es independiente y se aplica después de obtener una propuesta.
+
+### Verificación sin credenciales
+
+```bash
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest tests/test_llm_provider.py tests/test_api.py -v
+```
+
+`tests/conftest.py` aísla `.env`, elimina las variables de credenciales durante
+las pruebas y bloquea los transportes HTTP reales. Los tests usan el SDK con
+`MockTransport`: salida correcta, JSON inválido, SQL prohibido, decisiones no
+respondibles, credenciales inválidas, conexión, 429, indisponibilidad y timeout.
+Las esperas de reintentos se prueban con un reloj simulado; una prueba breve
+comprueba la cancelación real de una respuesta simulada lenta. No se hacen
+llamadas reales, por lo que estas pruebas no verifican el acceso de tu cuenta al
+modelo ni la calidad semántica de sus respuestas reales.
 
 ## Validación y ejecución segura de SQL
 
@@ -515,7 +614,7 @@ devuelve `QueryResponse` con `truncated: true`. No se usa 504 para el presupuest
 SQL: ese estado queda reservado al timeout del proveedor. Fallos de infraestructura
 de SQLite se clasifican como internos (500). Cada ejecución cierra su conexión.
 
-Para probar el ejecutor directamente, sin LLM y sin modificar el endpoint:
+Para probar el ejecutor directamente, sin llamar al LLM:
 
 ```bash
 .venv/bin/python -m pip install -r requirements.txt
@@ -559,10 +658,9 @@ solapamientos, las causas de rechazo y la coherencia de fechas y estados
 con varias semillas. `tests/test_cleaning.py` prueba normalización, fechas completas
 e imposibles, céntimos exactos, importes inválidos, duplicados, conflictos de ID,
 reglas de estado y múltiples motivos por fila. También contrasta la clasificación
-con el manifiesto del generador para varias semillas. Los tests del endpoint con
-LLM simulado acompañarán la integración real del proveedor.
-Las pruebas actuales del endpoint simulan el servicio de consultas completo y
-verifican los contratos y errores, sin generar SQL.
+con el manifiesto del generador para varias semillas. Los tests de contratos
+simulan el servicio de consultas completo; los del proveedor recorren el endpoint,
+el SDK con transporte simulado y el ejecutor SQL real sobre bases temporales.
 `tests/test_storage.py` ejecuta la CLI contra bases temporales y comprueba
 persistencia, auditoría, céntimos enteros, repetición sin duplicados y rollback
 ante fallos de escritura, además de errores de entrada claros.
@@ -621,13 +719,13 @@ duplicados y conflictos, independientes del generador y del manifiesto:
 
 ## Decisiones, próximos pasos y uso de IA
 
-Se eligió la biblioteca estándar para evitar dependencias de ejecución en esta
-etapa. Los importes se generan desde centavos enteros, evitando errores de coma
+Se eligió la biblioteca estándar para la generación, limpieza y carga. La API usa
+FastAPI/Pydantic, SQLGlot y el SDK de OpenAI. Los importes se generan desde centavos enteros, evitando errores de coma
 flotante. El manifiesto permite auditar errores sin mezclar datos crudos con
 resultados de procesamiento.
 
-Los siguientes pasos son conectar el servicio de FastAPI con OpenAI y con el
-ejecutor validado de solo lectura. Con más tiempo se añadirían
+Con más tiempo se añadirían evaluaciones de interpretación con preguntas reales,
+observabilidad del proveedor, autenticación de la API,
 estacionalidad, cantidades por producto, descuentos y un modelo separado de
 devoluciones y cobros.
 
@@ -654,9 +752,15 @@ incluyendo homónimos, cambios de mes y un empate en el corte del top 10.
 Para la API se pidió definir contratos y errores antes de ejecutar SQL. Se
 creó `main.py` como entrada, con modelos estrictos, excepciones concretas y
 serialización centralizada. Se comprobaron los estados y cuerpos mediante
-dependencias simuladas y se documentó explícitamente el 503 provisional del
-servicio todavía no conectado.
+dependencias simuladas. El 503 `service_not_ready` ahora representa configuración
+ausente o inválida en la integración del proveedor.
 Después se pidió construir la ejecución segura. Se implementaron validación por
 AST, authorizer cerrado, conexión de solo lectura y presupuestos de recursos.
 Se comprobó cada capa por separado, incluyendo pruebas que omiten el validador
 para verificar que SQLite también impide accesos y escrituras no autorizados.
+Para integrar el LLM se pidió el modelo GPT-6 Luna, configuración por entorno,
+salida estructurada y pruebas sin credenciales. La propuesta inicial de no
+reintentar se corrigió siguiendo la tabla del usuario: reintentos limitados para
+fallos transitorios, respeto de Retry-After y como máximo uno para timeout,
+sin regeneración de SQL inválido. Se aceptó el flujo de salida validada por
+Pydantic y ejecución únicamente mediante la capa de seguridad existente.

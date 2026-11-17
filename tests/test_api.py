@@ -96,6 +96,18 @@ def test_default_endpoint_is_explicitly_not_ready(client):
     assert "todavía no está configurado" in parsed.message
 
 
+def test_app_factory_keeps_dependency_overrides_isolated():
+    first_app, second_app = create_app(), create_app()
+
+    async def fake_service(question):
+        return QueryResponse(columns=[], rows=[], truncated=False)
+
+    first_app.dependency_overrides[get_query_service] = lambda: fake_service
+    with TestClient(first_app) as first_client, TestClient(second_app) as second_client:
+        assert first_client.post("/query", json={"question": "Ventas"}).status_code == 200
+        assert_error(second_client.post("/query", json={"question": "Ventas"}), 503, "service_not_ready")
+
+
 def test_successful_contract_with_simulated_service(application, client):
     calls = []
 
