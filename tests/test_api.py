@@ -12,6 +12,7 @@ from errors import (
     AmbiguousQuestionError, AppError, InternalServerError, InvalidInputError,
     InvalidLLMResponseError, OutOfScopeError, ProviderTimeoutError,
     ProviderUnavailableError, QueryServiceNotReadyError, SQLPolicyViolationError,
+    QueryResourceLimitError,
 )
 from main import create_app, get_query_service
 from schemas import ErrorResponse, MAX_QUESTION_LENGTH, QueryRequest, QueryResponse
@@ -44,6 +45,7 @@ def assert_error(response, status, code):
     (AmbiguousQuestionError, 422, "ambiguous_question"),
     (InvalidLLMResponseError, 502, "invalid_llm_response"),
     (SQLPolicyViolationError, 502, "sql_policy_violation"),
+    (QueryResourceLimitError, 502, "query_resource_limit"),
     (ProviderUnavailableError, 503, "provider_unavailable"),
     (ProviderTimeoutError, 504, "provider_timeout"),
     (QueryServiceNotReadyError, 503, "service_not_ready"),
