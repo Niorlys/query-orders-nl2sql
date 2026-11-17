@@ -39,9 +39,7 @@ de una transacción. Si tienes un `.env` anterior con otra ruta, ajusta
 `DATABASE_PATH` o carga explícitamente con `manage.py clean --database RUTA`:
 la CLI no lee `.env`, la API sí.
 
-Edita `.env` con tu editor y completa `OPENAI_API_KEY`. Verifica que
-`OPENAI_MODEL` corresponda a un modelo disponible para tu cuenta; el ejemplo
-usa `gpt-6-luna`. No publiques el archivo ni pegues la clave en comandos o capturas.
+Edita `.env` con tu editor y completa `OPENAI_API_KEY`. 
 Para arrancar la API:
 
 ```bash
@@ -76,10 +74,7 @@ son para macOS/Linux, desde la raíz del repositorio; no requieren instalar las
 dependencias Python en el host.
 
 La imagen usa **Python 3.13.12 slim-bookworm**, fijado también por digest, y
-**uv 0.10.4**, copiado de la imagen oficial de Astral. Las dependencias se instalan
-con `uv pip install --system -r requirements.txt`, respetando las versiones
-exactas de `constraints.txt`, y se comprueban con `uv pip check --system`.
-La interfaz `uv pip` ejecuta uv; no invoca el instalador pip. Se desactivan la
+**uv 0.10.4**, copiado de la imagen oficial de Astral. Se desactivan la
 caché y las descargas de Python para utilizar el intérprete de la imagen base.
 `.dockerignore` excluye todo salvo una lista explícita de
 fuentes y dependencias: no entran `.env`, credenciales, datos, `.git`, entornos
@@ -119,24 +114,6 @@ El último comando usa el `CMD` de la imagen:
 La carga es una acción explícita del paso 3. Detén la API antes de reemplazar
 el dataset para que las consultas de la demostración utilicen una versión estable.
 
-Los archivos persisten en el host al eliminar el contenedor:
-
-| Host | Contenedor | Contenido |
-| --- | --- | --- |
-| `data/raw/` | `/app/data/raw/` | CSV y manifiesto |
-| `data/processed/` | `/app/data/processed/` | SQLite |
-
-El montaje de generación/carga permite escribir; el montaje de la API es
-`readonly`, además de la conexión SQLite de solo lectura. `--user` mantiene
-el UID/GID de tu usuario para evitar archivos propiedad de root y problemas al
-leer directorios privados. La imagen tiene un usuario numérico no root por
-defecto (10001), sustituido por el UID/GID del host en estos comandos.
-
-`--env-file .env` proporciona `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_BASE_URL`,
-timeouts, reintentos y zona horaria en el arranque. Ese archivo no se monta ni se
-copia dentro de la imagen. Usa líneas simples `VARIABLE=valor`, como en
-`.env.example`. `-e DATABASE_PATH=...` fija la ruta **dentro del contenedor** y
-prevalece sobre una ruta de tu host o un nombre anterior guardado en `.env`.
 
 En otra terminal, prueba el mismo `curl` del inicio rápido o abre
 [Swagger UI](http://127.0.0.1:8000/docs). Con la semilla predeterminada, la
@@ -148,35 +125,6 @@ Si solo quieres verificar contratos sin una clave, puedes omitir `--env-file`:
 `/docs` funciona, las preguntas vacías devuelven 422 y las válidas devuelven 503
 `service_not_ready`. Si la base no está cargada, la API no la crea automáticamente.
 
-### Verificación automática de Docker
-
-Después de construir la imagen, con Python 3.11+ en el host:
-
-```bash
-python3 tests/docker_smoke.py ventas-demo
-```
-
-Esta comprobación usa un directorio temporal, sin leer `.env` ni tocar `data/`.
-Genera dos veces y compara hashes, carga dos veces y compara el contenido lógico
-de SQLite, arranca el `CMD` real, comprueba respuestas HTTP y ejecuta una consulta
-de ventas mediante el ejecutor seguro dentro del contenedor. También intenta
-escribir en el montaje de solo lectura y exige que falle, comprueba que la imagen
-no contiene configuración ni datos locales y verifica que los hashes de los
-archivos persistidos no cambien al arrancar y utilizar la API. El contenedor y
-los archivos temporales se eliminan al terminar. No realiza llamadas a OpenAI.
-
-El job `docker` de GitHub Actions construye la imagen y ejecuta esta comprobación,
-separado de pytest. La prueba de integración real con el LLM sigue siendo manual
-y se reproduce con `--env-file .env` y las preguntas de esta guía.
-
-Verificación local: la imagen construida con uv pasó todas estas comprobaciones
-en OrbStack (Linux ARM64), incluidas la consulta de 98.900 centavos y la denegación
-de escritura. Los datos conservaron sus hashes al arrancar y utilizar la API.
-La CI verificará también la construcción y ejecución en el runner Linux de GitHub.
-
-Referencias: [construcción de imágenes](https://docs.docker.com/build/building/best-practices/),
-[uv en Docker](https://docs.astral.sh/uv/guides/integration/docker/)
-y [montajes de solo lectura](https://docs.docker.com/engine/storage/bind-mounts/).
 
 ## Demostración: seguridad y corrección de respuestas
 
@@ -236,31 +184,6 @@ parcial. Las pruebas en `tests/test_query_e2e.py` comprueban estas reglas con
 respuestas simuladas; la tabla permite evaluar también al proveedor real.
 Las llamadas reales consumen la cuota de tu cuenta y pueden variar entre ejecuciones.
 
-### Registro de la verificación manual
-
-El **17 de noviembre de 2026, 04:24 UTC** (16 de noviembre en Ciudad de México),
-se arrancó Uvicorn en `127.0.0.1:8001` con el fixture anterior y se enviaron las
-primeras seis preguntas de la tabla mediante HTTP real. Se usó OpenAI Responses,
-modelo `gpt-6-luna`, con timeout de 10 segundos por intento, presupuesto total
-de 30 segundos y hasta dos reintentos adicionales.
-
-| Caso | Observado | Tiempo aproximado |
-| --- | --- | ---: |
-| Ventas de marzo | 200; 24.000 centavos | 3,60 s |
-| Ventas de abril | 200; 10.000 centavos | 3,20 s |
-| Ranking | 200; diez clientes, valores y orden exactos de la tabla | 1,89 s |
-| Sin datos | 200; filas vacías, sin truncamiento | 2,10 s |
-| Fuera de alcance | 422; `out_of_scope` | 1,61 s |
-| Año ambiguo | 422; `ambiguous_question` | 3,66 s |
-
-**6/6 resultados coincidentes**; el SHA-256 de la base antes y después fue el
-mismo. Para reproducirlo, sigue la carga del fixture, el arranque en el puerto
-8001 y las seis preguntas anteriores con tu propia configuración. Los tiempos
-no son una garantía de rendimiento. Las credenciales solo se leyeron del `.env`
-local: no se guardaron claves, cabeceras de autorización ni trazas del proveedor.
-El intento de leer rechazos se comprueba automáticamente con un proveedor
-simulado; no formó parte de estas seis llamadas reales.
-
 ## Formato, pruebas y CI
 
 ```bash
@@ -279,22 +202,10 @@ desde el checkout. No configura secretos ni llama al proveedor real. Los tests
 bloquean la red y aíslan `.env`; la prueba real se hace manualmente siguiendo la
 sección anterior. La CI quedará ejecutada en GitHub cuando se publiquen los cambios.
 
-Se verificó también un clon local con los archivos de esta entrega, sin `.env`,
-datos ni entorno virtual preexistentes. Con un entorno nuevo de Python 3.14.4,
-la instalación desde PyPI, `pip check`, generación, dos cargas, Ruff y los
-**382 tests** terminaron correctamente. El arranque de Uvicorn se comprueba sin
-credenciales: `/docs` responde 200, una pregunta vacía 422 y una pregunta válida
-503 `service_not_ready` hasta configurar la clave. La prueba con credenciales
-reales está registrada por separado arriba.
-
-Referencias: [formato con Ruff](https://docs.astral.sh/ruff/formatter/)
-y [pruebas Python en GitHub Actions](https://docs.github.com/en/actions/tutorials/build-and-test-code/python).
 
 ## Generar datos
 
-Requiere Python 3.11 o superior para todas las etapas, incluidos los límites de
-SQLite del ejecutor. El generador usa únicamente la biblioteca
-estándar y no necesita una API key ni llamadas a OpenAI.
+Correr este comando:
 
 ```bash
 python3 manage.py generate
@@ -323,17 +234,8 @@ Python, ya que los algoritmos auxiliares de `random` pueden cambiar.
 ## Datos y criterio de ventas
 
 Columnas: `pedido_id`, `fecha`, `fecha_completado`, `cliente`, `país`, `producto`,
-`importe`, `moneda`, `estado` y `cliente_id`. Las variables y funciones están en inglés;
-las columnas y los estados del dominio se mantienen en español.
-Cada pedido tiene un producto, importe con dos decimales y moneda `USD`.
-Hay 120 clientes sintéticos con ID y país estables y seis productos con precio fijo.
-`cliente_id` es independiente del nombre: dos personas con el mismo nombre pueden
-tener IDs diferentes. Los CSV de la versión anterior deben regenerarse con
-`python3 manage.py generate` para incorporar esta columna; no se infiere el ID
-a partir del nombre. Los conteos de pedidos y errores de la semilla predeterminada
-se mantienen, pero el hash del CSV cambia al añadir la columna.
-Los estados se sortean con pesos de 20% pendiente, 70% completado y 10% cancelado;
-son probabilidades, no cuotas exactas.
+`importe`, `moneda`, `estado` y `cliente_id`. 
+
 
 | Estado | Significado | Suma en ventas |
 | --- | --- | --- |
@@ -352,52 +254,6 @@ posteriores a una venta.
 Un pedido cancelado válido se conservará en `pedidos`. `pedidos_rechazados` se
 reservará para problemas de calidad irrecuperables sin inventar información,
 como una fecha imposible o incompleta o un importe vacío.
-
-## Errores controlados y manifiesto
-
-Primero se sortean cantidades enteras uniformes en estos rangos inclusivos:
-
-| Categoría | Rango | Resultado con la semilla predeterminada |
-| --- | --- | --- |
-| Pedidos originales | 1.001–2.000 | 1.508 |
-| Filas duplicadas adicionales | 0–40 | 36 |
-| Pedidos con una fecha inválida o incompleta | 0–40 | 21 |
-| Pedidos con importe vacío | 0–10 | 1 |
-
-El CSV predeterminado contiene 1.544 filas de datos, más la cabecera.
-Además, se selecciona el 25% de los originales para variantes recuperables de
-países, el 20% para espacios alrededor de cliente, producto o estado, y el 30%
-para formatos de fecha completos. Las cantidades se redondean hacia abajo:
-377, 301 y 452, respectivamente, con la semilla predeterminada.
-Los formatos válidos son `YYYY-MM-DD`, `DD/MM/YYYY` y `YYYY/MM/DD`; el formato
-con día primero nunca se interpreta como mes primero. Las variantes de países
-incluyen diferencias de mayúsculas, tildes y `USA` para `Estados Unidos`.
-
-**Todos los porcentajes del manifiesto usan como denominador el número de
-pedidos originales**, incluso el porcentaje de duplicados adicionales, y nunca
-el total final de filas. Las muestras de cada categoría son independientes y
-pueden solaparse. Dentro de cada categoría no se repite un pedido. Una fecha
-inválida puede reemplazar una variante de formato aplicada previamente; las
-cantidades de variantes cuentan operaciones inyectadas, no necesariamente
-variantes visibles en el CSV final.
-
-Los errores de fecha afectan `fecha` o, solo en completados, `fecha_completado`.
-Se inyectan fechas imposibles (`2025-02-30`, `2025-13-01`), incompletas
-(`2025-03`) o vacías. No se deben inferir partes faltantes durante la limpieza.
-Los duplicados se copian después de inyectar los errores y pueden repetir
-pedidos defectuosos. Por eso las filas defectuosas del CSV completo pueden ser
-más que los pedidos originales defectuosos.
-
-El manifiesto registra configuración, cantidades, porcentajes y SHA-256 del CSV.
-La lista `errors` contiene solo ID, columna y tipo de los errores que provocan
-rechazo. Las variaciones recuperables se contabilizan sin registrar cada cambio
-ni guardar valores originales. También registra las posiciones de cada duplicado.
-Los números de fila empiezan en 1 e incluyen
-la cabecera: el primer pedido está en la fila 2. También contiene los IDs
-rechazables y los conteos esperados de aceptados/rechazados y estados
-**después de deduplicar**. Un original con ambos errores se rechaza una sola
-vez. El manifiesto sirve para verificar la futura limpieza; el limpiador deberá
-trabajar a partir del CSV, sin depender del manifiesto.
 
 ## Normalizar y clasificar filas
 
@@ -443,16 +299,6 @@ Las tablas son:
 **Cada carga reemplaza el contenido de estas tres tablas** con el CSV indicado;
 no acumula ejecuciones ni conserva un historial de cargas. Se realiza en una
 transacción: si falla la escritura, los datos anteriores permanecen intactos.
-Las restricciones de SQLite exigen IDs positivos y únicos, campos obligatorios
-no nulos ni vacíos, céntimos enteros positivos, países del catálogo, moneda USD
-y estados permitidos. También comprueban la coherencia entre estado y fecha de
-finalización. Las filas de auditoría requieren número de fila válido y datos y
-motivos presentes. Los esquemas anteriores de la demo se actualizan automáticamente
-en la primera carga con estas restricciones, dentro de la misma transacción;
-si falla, se recuperan tanto los datos como el esquema anterior.
-Repetir el comando con el mismo CSV no duplica pedidos. El CSV original no se
-modifica. Los directorios generados `data/raw/` y `data/processed/` están en
-`.gitignore` (esto no desversiona archivos que ya estuvieran registrados en Git).
 
 Para comprobar la base directamente, si tienes instalado el cliente `sqlite3`:
 
@@ -578,42 +424,6 @@ sqlite3 -header -column data/processed/pedidos.sqlite3 "SELECT * FROM ventas_por
 sqlite3 -header -column data/processed/pedidos.sqlite3 "SELECT * FROM top_10_clientes ORDER BY importe_total_centavos DESC, numero_pedidos DESC, cliente_id ASC;"
 ```
 
-### Comprobación manual con datos conocidos
-
-El archivo versionado `tests/fixtures/orders_views.csv` contiene 19 filas pequeñas.
-Para probarlo sin reemplazar tu base habitual:
-
-```bash
-python3 manage.py clean --input tests/fixtures/orders_views.csv --database /tmp/pedidos-vistas-demo.sqlite3
-sqlite3 -header -column /tmp/pedidos-vistas-demo.sqlite3 "SELECT * FROM ventas_por_mes_pais ORDER BY anio_mes, país;"
-sqlite3 -header -column /tmp/pedidos-vistas-demo.sqlite3 "SELECT * FROM top_10_clientes ORDER BY importe_total_centavos DESC, numero_pedidos DESC, cliente_id ASC;"
-```
-
-La carga debe producir 16 aceptadas, 2 rechazadas (fecha imposible y moneda EUR)
-y 1 duplicada. Las aceptadas incluyen 1 cancelada y 1 pendiente. Totales esperados:
-
-| Año-mes | País | Pedidos completados | Total en céntimos USD |
-| --- | --- | ---: | ---: |
-| 2024-03 | España | 1 | 500 |
-| 2025-03 | España | 11 | 24.000 |
-| 2025-03 | México | 1 | 15.000 |
-| 2025-04 | España | 1 | 10.000 |
-
-España en marzo de 2025 suma 50 + 100 + nueve pedidos de 10 = **240 USD**.
-El pedido de 100 USD creado el 31 de marzo y entregado el 2 de abril suma en
-abril. El ranking empieza por ID 2 (Ana, 2 pedidos, 150 USD), ID 1 (Bruno,
-1 pedido, 150 USD) e ID 3 (otra Ana, 2 pedidos, 105 USD). Les siguen los IDs
-4 a 10 con 10 USD cada uno; los IDs 11 y 12 quedan fuera por el desempate.
-
-Pruebas automáticas de estas vistas:
-
-```bash
-.venv/bin/python -m pytest tests/test_views.py -v
-```
-
-Verifican totales exactos, meses de finalización, separación de años, exclusión
-de no ventas, homónimos, desempates, límite de diez, ausencia de ventas,
-repetibilidad y rollback ante fallos en las vistas.
 
 ## API: contratos y errores
 
@@ -771,9 +581,7 @@ categorías, reemplazando también el esquema 422 predeterminado de FastAPI.
 Se prueban códigos HTTP, formato Pydantic, entradas inválidas, límites de longitud,
 escalares JSON, coherencia de filas, mensajes genéricos, errores 404/405,
 cabeceras HTTP, revalidación de respuestas y el esquema OpenAPI.
-Referencias de implementación: [manejo de errores de FastAPI](https://fastapi.tiangolo.com/tutorial/handling-errors/),
-[respuestas adicionales en OpenAPI](https://fastapi.tiangolo.com/advanced/additional-responses/)
-y [modo estricto de Pydantic](https://docs.pydantic.dev/latest/concepts/strict_mode/).
+
 
 ## Proveedor LLM y reintentos
 
@@ -963,38 +771,6 @@ de filas y JSON multibyte, y la interrupción real de un producto cartesiano cos
 .venv/bin/python -m pytest tests/test_query_executor.py -v
 ```
 
-Referencias: [AST y parser de SQLGlot](https://sqlglot.com/sqlglot.html),
-[authorizer de SQLite](https://www.sqlite.org/c3ref/set_authorizer.html) y
-[conexiones, límites y progress handler de Python](https://docs.python.org/3.13/library/sqlite3.html).
-
-## Verificación
-
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m pytest -q
-```
-
-Los tests ejecutan la CLI dos veces y comparan CSV y manifiesto byte a byte.
-Comprueban el hash, los duplicados exactos, las cantidades de errores, los
-solapamientos, las causas de rechazo y la coherencia de fechas y estados
-con varias semillas. `tests/test_cleaning.py` prueba normalización, fechas completas
-e imposibles, céntimos exactos, importes inválidos, duplicados, conflictos de ID,
-reglas de estado y múltiples motivos por fila. También contrasta la clasificación
-con el manifiesto del generador para varias semillas. Los tests de contratos
-simulan el servicio de consultas completo; los del proveedor recorren el endpoint,
-el SDK con transporte simulado y el ejecutor SQL real sobre bases temporales.
-`tests/test_storage.py` ejecuta la CLI contra bases temporales y comprueba
-persistencia, auditoría, céntimos enteros, repetición sin duplicados y rollback
-ante fallos de escritura, además de errores de entrada claros.
-También compara el contenido completo tras dos ejecuciones y prueba inserciones
-SQL directas inválidas para verificar las restricciones sin pasar por la limpieza.
-Puedes ejecutar solo estas pruebas con:
-
-```bash
-.venv/bin/python -m pytest tests/test_storage.py -v
-```
-
 ### Comparar la limpieza con el manifiesto
 
 Desde la raíz del proyecto, con las dependencias de pruebas instaladas:
@@ -1047,52 +823,37 @@ FastAPI/Pydantic, SQLGlot y el SDK de OpenAI. Los importes se generan desde cent
 flotante. El manifiesto permite auditar errores sin mezclar datos crudos con
 resultados de procesamiento.
 
-Con más tiempo se añadirían evaluaciones de interpretación con preguntas reales,
-observabilidad del proveedor, autenticación de la API,
-estacionalidad, cantidades por producto, descuentos y un modelo separado de
-devoluciones y cobros.
+Con más tiempo, las prioridades serían:
 
-Se pidió a la IA implementar un generador reproducible, una CLI y un manifiesto
-de errores controlados. Se incorporaron sus propuestas de biblioteca estándar,
-RNG local y manifiesto con SHA-256, junto con tests para comprobarlas. El usuario
-precisó que los cancelados se conservan pero no suman ventas, que la finalización
-determina el mes, que la moneda es USD y que las variables deben estar en inglés;
-esas indicaciones se aplicaron al código y a esta documentación. A petición del
-usuario, se simplificó el manifiesto inicial: se eliminó el historial detallado
-de cada variación recuperable y se conservó la trazabilidad de los rechazos.
-Para la limpieza se pidió a la IA normalizar sin inventar datos y clasificar
-filas de forma excluyente. Se implementó el rechazo de todas las versiones de
-un ID contradictorio y se verificaron los resultados contra el manifiesto,
-sin usarlo para corregir datos. La referencia del libro se limitó a principios
-de calidad y consistencia; no se incorporaron técnicas de imputación.
-Después se pidió conectar la limpieza con la CLI y SQLite. Se implementaron
-tablas separadas de pedidos y auditoría, reemplazo transaccional de la carga y
-tests de integración que verifican los registros realmente almacenados.
-Para las vistas se pidió respetar ventas completadas y comprobar los totales a
-mano. Se añadió un ID de cliente independiente del nombre, se definieron
-desempates explícitos y se verificaron los resultados con un CSV pequeño fijo,
-incluyendo homónimos, cambios de mes y un empate en el corte del top 10.
-Para la API se pidió definir contratos y errores antes de ejecutar SQL. Se
-creó `main.py` como entrada, con modelos estrictos, excepciones concretas y
-serialización centralizada. Se comprobaron los estados y cuerpos mediante
-dependencias simuladas. El 503 `service_not_ready` ahora representa configuración
-ausente o inválida en la integración del proveedor.
-Después se pidió construir la ejecución segura. Se implementaron validación por
-AST, authorizer cerrado, conexión de solo lectura y presupuestos de recursos.
-Se comprobó cada capa por separado, incluyendo pruebas que omiten el validador
-para verificar que SQLite también impide accesos y escrituras no autorizados.
-Para integrar el LLM se pidió el modelo GPT-6 Luna, configuración por entorno,
-salida estructurada y pruebas sin credenciales. La propuesta inicial de no
-reintentar se corrigió siguiendo la tabla del usuario: reintentos limitados para
-fallos transitorios, respeto de Retry-After y como máximo uno para timeout,
-sin regeneración de SQL inválido. Se aceptó el flujo de salida validada por
-Pydantic y ejecución únicamente mediante la capa de seguridad existente.
-Al verificar el endpoint de extremo a extremo, se conservó esa conexión ya
-implementada y se ampliaron los tests con SQLite temporal, ranking, ausencia
-de datos y accesos prohibidos. Se corrigió la cobertura: los tests anteriores
-no comprobaban el ranking ni los resultados vacíos a través del endpoint real.
-Para preparar la entrega se pidió completar la guía, automatizar formato y
-pruebas y comprobar el proveedor real. Se incorporaron Ruff, GitHub Actions y
-versiones de dependencias verificadas. Se corrigió la ruta de `.env.example`
-para coincidir con la carga predeterminada y se contrastaron las respuestas del
-modelo con importes conocidos, sin tomar HTTP 200 como prueba de interpretación correcta.
+- **Resolver ambigüedades y explicar qué se calculó.** Si hay varios años y
+  alguien pregunta «¿cuánto vendimos en marzo?», la API debería pedir el año y
+  permitir continuar con esa aclaración. Actualmente devuelve 422
+  `ambiguous_question`; faltaría el flujo de aclaración y una explicación del
+  resultado que indique periodo, país, moneda y criterio de ventas completadas.
+  También se ampliarían las evaluaciones de interpretación con preguntas reales.
+- **Añadir observabilidad robusta.** Asignar un `request_id` a cada petición y
+  registrar tiempos separados del proveedor, la validación y la ejecución SQL.
+  Medir errores, consultas rechazadas, reintentos y consumo de tokens permitiría
+  distinguir si la demora viene del modelo o de la consulta. Se usaría
+  OpenTelemetry para relacionar trazas, métricas y logs al investigar problemas,
+  evitando registrar claves y datos sensibles.
+- **Controlar acceso, consumo y concurrencia.** Antes de publicar la API,
+  incorporar autenticación, límites de solicitudes por usuario, un máximo de
+  consultas simultáneas y presupuestos de consumo del LLM.
+- **Dar trazabilidad al procesamiento de datos.** Registrar cada carga con un
+  identificador, hash del archivo, versión del proceso, fecha y resumen de
+  calidad. Completar la trazabilidad existente de las filas rechazadas para
+  vincular cada una con su carga, archivo y número de línea originales, incluso
+  después de reemplazar el conjunto cargado.
+
+Como ampliaciones del modelo de negocio quedarían la estacionalidad, cantidades
+por producto, descuentos y un modelo separado de devoluciones y cobros.
+
+El trabajo con la IA se dividió en tareas por etapas (*stages*): generación,
+limpieza, carga, vistas, contratos de API, seguridad SQL, proveedor LLM,
+integración, entrega y Docker. Cada etapa tuvo un alcance concreto y sus
+comprobaciones antes de avanzar. Esta organización buscó mantener ventanas de
+contexto pequeñas, por debajo de **200.000 tokens**, centradas en la tarea y en
+las decisiones necesarias para completarla. Es un criterio de organización del
+trabajo, no un límite de tokens impuesto por la aplicación.
+
