@@ -113,17 +113,32 @@ def save_sqlite(records: list[ClassifiedRow], database_path: Path) -> dict:
                             pedido_id, fecha, fecha_completado, cliente_id, cliente, país, producto,
                             importe_centavos, moneda, estado, row_number, original_json
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (int(values["pedido_id"]), values["fecha"], values["fecha_completado"],
-                         int(values["cliente_id"]), values["cliente"], values["país"], values["producto"],
-                         values["importe_centavos"], values["moneda"], values["estado"],
-                         record.row_number, encode_json(record.original)),
+                        (
+                            int(values["pedido_id"]),
+                            values["fecha"],
+                            values["fecha_completado"],
+                            int(values["cliente_id"]),
+                            values["cliente"],
+                            values["país"],
+                            values["producto"],
+                            values["importe_centavos"],
+                            values["moneda"],
+                            values["estado"],
+                            record.row_number,
+                            encode_json(record.original),
+                        ),
                     )
                 elif record.category in {"rejected", "duplicate"}:
-                    values = (record.row_number, encode_json(record.original),
-                              encode_json(record.normalized), encode_json(record.reasons))
+                    values = (
+                        record.row_number,
+                        encode_json(record.original),
+                        encode_json(record.normalized),
+                        encode_json(record.reasons),
+                    )
                     if record.category == "rejected":
                         connection.execute(
-                            "INSERT INTO pedidos_rechazados VALUES (?, ?, ?, ?)", values,
+                            "INSERT INTO pedidos_rechazados VALUES (?, ?, ?, ?)",
+                            values,
                         )
                     else:
                         connection.execute(
@@ -135,8 +150,12 @@ def save_sqlite(records: list[ClassifiedRow], database_path: Path) -> dict:
             create_views(connection, views_script)
             stored_counts = {
                 "accepted": connection.execute("SELECT COUNT(*) FROM pedidos").fetchone()[0],
-                "rejected": connection.execute("SELECT COUNT(*) FROM pedidos_rechazados").fetchone()[0],
-                "duplicate": connection.execute("SELECT COUNT(*) FROM pedidos_duplicados").fetchone()[0],
+                "rejected": connection.execute(
+                    "SELECT COUNT(*) FROM pedidos_rechazados"
+                ).fetchone()[0],
+                "duplicate": connection.execute(
+                    "SELECT COUNT(*) FROM pedidos_duplicados"
+                ).fetchone()[0],
             }
             if any(count != summary[category] for category, count in stored_counts.items()):
                 raise ValueError("Los conteos guardados no coinciden con la clasificación.")

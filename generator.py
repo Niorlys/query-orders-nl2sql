@@ -13,8 +13,16 @@ DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent / "data" / "raw"
 START_DATE = date(2024, 1, 1)
 END_DATE = date(2025, 12, 15)
 FIELD_NAMES = (
-    "pedido_id", "fecha", "fecha_completado", "cliente", "país",
-    "producto", "importe", "moneda", "estado", "cliente_id",
+    "pedido_id",
+    "fecha",
+    "fecha_completado",
+    "cliente",
+    "país",
+    "producto",
+    "importe",
+    "moneda",
+    "estado",
+    "cliente_id",
 )
 COUNTRY_VARIANTS = {
     "España": ("espana", "ESPAÑA", " España "),
@@ -26,8 +34,12 @@ COUNTRY_VARIANTS = {
 }
 # Prices in USD cents; one product per order.
 PRODUCTS = (
-    ("Teclado", 4500), ("Ratón", 2500), ("Monitor", 24900),
-    ("Auriculares", 6900), ("Webcam", 5900), ("Portátil", 89900),
+    ("Teclado", 4500),
+    ("Ratón", 2500),
+    ("Monitor", 24900),
+    ("Auriculares", 6900),
+    ("Webcam", 5900),
+    ("Portátil", 89900),
 )
 INVALID_DATES = ("2025-02-30", "2025-13-01", "2025-03", "")
 
@@ -38,36 +50,44 @@ def generate_dataset(seed: int = DEFAULT_SEED) -> tuple[list[dict], dict]:
     duplicate_count = rng.randint(0, 40)
     invalid_date_count = rng.randint(0, 40)
     empty_amount_count = rng.randint(0, 10)
-    customers = [(str(index), f"Cliente {index:03d}", rng.choice(tuple(COUNTRY_VARIANTS)))
-                 for index in range(1, 121)]
+    customers = [
+        (str(index), f"Cliente {index:03d}", rng.choice(tuple(COUNTRY_VARIANTS)))
+        for index in range(1, 121)
+    ]
     rows = []
     for order_id in range(1, original_count + 1):
-        created_date = START_DATE + timedelta(
-            days=rng.randint(0, (END_DATE - START_DATE).days)
+        created_date = START_DATE + timedelta(days=rng.randint(0, (END_DATE - START_DATE).days))
+        status = rng.choices(("pendiente", "completado", "cancelado"), weights=(20, 70, 10), k=1)[0]
+        completed_date = (
+            created_date + timedelta(days=rng.randint(0, 14)) if status == "completado" else None
         )
-        status = rng.choices(
-            ("pendiente", "completado", "cancelado"), weights=(20, 70, 10), k=1
-        )[0]
-        completed_date = (created_date + timedelta(days=rng.randint(0, 14))
-                          if status == "completado" else None)
         customer_id, customer, country = rng.choice(customers)
         product, amount_cents = rng.choice(PRODUCTS)
-        rows.append({
-            "pedido_id": str(order_id),
-            "fecha": created_date.isoformat(),
-            "fecha_completado": completed_date.isoformat() if completed_date else "",
-            "cliente": customer, "país": country, "producto": product,
-            "importe": f"{amount_cents // 100}.{amount_cents % 100:02d}",
-            "moneda": "USD", "estado": status, "cliente_id": customer_id,
-        })
+        rows.append(
+            {
+                "pedido_id": str(order_id),
+                "fecha": created_date.isoformat(),
+                "fecha_completado": completed_date.isoformat() if completed_date else "",
+                "cliente": customer,
+                "país": country,
+                "producto": product,
+                "importe": f"{amount_cents // 100}.{amount_cents % 100:02d}",
+                "moneda": "USD",
+                "estado": status,
+                "cliente_id": customer_id,
+            }
+        )
     errors = []
 
     def inject_error(index: int, field: str, value: str, category: str) -> None:
         row = rows[index]
-        errors.append({
-            "category": category, "order_id": row["pedido_id"],
-            "field": field,
-        })
+        errors.append(
+            {
+                "category": category,
+                "order_id": row["pedido_id"],
+                "field": field,
+            }
+        )
         row[field] = value
 
     # Independent samples can overlap; sorting keeps their traversal stable.
@@ -94,33 +114,45 @@ def generate_dataset(seed: int = DEFAULT_SEED) -> tuple[list[dict], dict]:
     # Copy raw rows after corrupting them, preserving the original order ID.
     duplicates = []
     for index in sorted(rng.sample(range(original_count), duplicate_count)):
-        duplicates.append({
-            "order_id": rows[index]["pedido_id"], "source_csv_row_number": index + 2,
-            "duplicate_csv_row_number": len(rows) + 2,
-        })
+        duplicates.append(
+            {
+                "order_id": rows[index]["pedido_id"],
+                "source_csv_row_number": index + 2,
+                "duplicate_csv_row_number": len(rows) + 2,
+            }
+        )
         rows.append(rows[index].copy())
 
     rejected_indices = set(invalid_indices) | set(empty_indices)
     counts = {
-        "duplicate": duplicate_count, "invalid_date": invalid_date_count,
-        "empty_amount": empty_amount_count, "country_variant": original_count // 4,
-        "whitespace": original_count // 5, "complete_date_format": original_count * 3 // 10,
+        "duplicate": duplicate_count,
+        "invalid_date": invalid_date_count,
+        "empty_amount": empty_amount_count,
+        "country_variant": original_count // 4,
+        "whitespace": original_count // 5,
+        "complete_date_format": original_count * 3 // 10,
     }
-    accepted_rows = [row for index, row in enumerate(rows[:original_count])
-                     if index not in rejected_indices]
+    accepted_rows = [
+        row for index, row in enumerate(rows[:original_count]) if index not in rejected_indices
+    ]
     manifest = {
-        "schema_version": 2, "seed": seed, "currency": "USD",
+        "schema_version": 2,
+        "seed": seed,
+        "currency": "USD",
         "creation_date_range": {"start": START_DATE.isoformat(), "end": END_DATE.isoformat()},
         "completion_delay_days": {"min": 0, "max": 14},
-        "original_order_count": original_count, "total_csv_row_count": len(rows),
+        "original_order_count": original_count,
+        "total_csv_row_count": len(rows),
         "injection_counts": counts,
         "injection_percentages_of_originals": {
-            category: round(count / original_count * 100, 6)
-            for category, count in counts.items()
+            category: round(count / original_count * 100, 6) for category, count in counts.items()
         },
         "categories_may_overlap": True,
-        "invalid_date_and_empty_amount_overlap_count": len(set(invalid_indices) & set(empty_indices)),
-        "errors": errors, "duplicates": duplicates,
+        "invalid_date_and_empty_amount_overlap_count": len(
+            set(invalid_indices) & set(empty_indices)
+        ),
+        "errors": errors,
+        "duplicates": duplicates,
         "expected_after_deduplication": {
             "accepted_order_count": len(accepted_rows),
             "rejected_order_count": len(rejected_indices),

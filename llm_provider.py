@@ -8,13 +8,22 @@ from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Literal
 
-from openai import APIConnectionError, APIResponseValidationError, APIStatusError, APITimeoutError, AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APIResponseValidationError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncOpenAI,
+)
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from config import Settings
 from errors import (
-    InternalServerError, InvalidLLMResponseError, ProviderTimeoutError,
-    ProviderUnavailableError, QueryServiceNotReadyError,
+    InternalServerError,
+    InvalidLLMResponseError,
+    ProviderTimeoutError,
+    ProviderUnavailableError,
+    QueryServiceNotReadyError,
 )
 from llm_prompt import build_instructions
 
@@ -78,8 +87,15 @@ def parse_decision(response) -> LLMDecision:
 
 
 class OpenAIProvider:
-    def __init__(self, client: AsyncOpenAI, settings: Settings, *, clock=time.monotonic,
-                 sleep=asyncio.sleep, wall_clock=lambda: datetime.now(timezone.utc)):
+    def __init__(
+        self,
+        client: AsyncOpenAI,
+        settings: Settings,
+        *,
+        clock=time.monotonic,
+        sleep=asyncio.sleep,
+        wall_clock=lambda: datetime.now(timezone.utc),
+    ):
         self.client = client
         self.settings = settings
         self.clock, self.sleep, self.wall_clock = clock, sleep, wall_clock
@@ -100,10 +116,19 @@ class OpenAIProvider:
                         model=self.settings.model,
                         instructions=build_instructions(reference_date, self.settings.timezone),
                         input=[{"role": "user", "content": question}],
-                        text={"format": {"type": "json_schema", "name": "query_decision",
-                                         "strict": True, "schema": LLMDecision.model_json_schema()}},
-                        max_output_tokens=4096, reasoning={"effort": "low"},
-                        store=False, tools=[], timeout=attempt_timeout,
+                        text={
+                            "format": {
+                                "type": "json_schema",
+                                "name": "query_decision",
+                                "strict": True,
+                                "schema": LLMDecision.model_json_schema(),
+                            }
+                        },
+                        max_output_tokens=4096,
+                        reasoning={"effort": "low"},
+                        store=False,
+                        tools=[],
+                        timeout=attempt_timeout,
                     )
             except (APITimeoutError, TimeoutError):
                 failure = ProviderTimeoutError("Provider attempt timed out")
@@ -114,14 +139,18 @@ class OpenAIProvider:
                 raise InvalidLLMResponseError("Invalid provider envelope") from error
             except APIStatusError as error:
                 if error.status_code in (401, 403, 404):
-                    raise QueryServiceNotReadyError("Provider credentials, access, model or URL invalid") from error
+                    raise QueryServiceNotReadyError(
+                        "Provider credentials, access, model or URL invalid"
+                    ) from error
                 if error.status_code == 408:
                     failure = ProviderTimeoutError("Provider returned HTTP 408")
                     is_timeout = True
                 elif error.status_code in (409, 429) or error.status_code >= 500:
                     failure = ProviderUnavailableError("Temporary provider HTTP failure")
                 else:
-                    raise InternalServerError("Provider rejected the API request configuration") from error
+                    raise InternalServerError(
+                        "Provider rejected the API request configuration"
+                    ) from error
                 headers = error.response.headers
             else:
                 if self.clock() >= deadline:
@@ -144,5 +173,7 @@ class OpenAIProvider:
                 async with asyncio.timeout(remaining):
                     await self.sleep(delay)
             except TimeoutError as error:
-                raise ProviderTimeoutError("Total deadline exceeded while waiting to retry") from error
+                raise ProviderTimeoutError(
+                    "Total deadline exceeded while waiting to retry"
+                ) from error
         raise InternalServerError("Unreachable retry state")

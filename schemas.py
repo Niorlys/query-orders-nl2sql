@@ -3,7 +3,14 @@
 from enum import Enum
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 
 MAX_QUESTION_LENGTH = 1000
@@ -12,19 +19,29 @@ JsonScalar = str | int | float | bool | None
 
 class ApiModel(BaseModel):
     model_config = ConfigDict(
-        extra="forbid", strict=True, allow_inf_nan=False, revalidate_instances="always",
+        extra="forbid",
+        strict=True,
+        allow_inf_nan=False,
+        revalidate_instances="always",
     )
 
 
 class QueryRequest(ApiModel):
-    question: Annotated[str, StringConstraints(
-        strip_whitespace=True, min_length=1, max_length=MAX_QUESTION_LENGTH,
-    )] = Field(description="Pregunta de 1 a 1000 caracteres tras quitar espacios exteriores.")
+    question: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            min_length=1,
+            max_length=MAX_QUESTION_LENGTH,
+        ),
+    ] = Field(description="Pregunta de 1 a 1000 caracteres tras quitar espacios exteriores.")
 
 
 class QueryResponse(ApiModel):
     columns: list[str] = Field(description="Nombres de columnas en el orden de cada fila.")
-    rows: list[list[JsonScalar]] = Field(description="Celdas escalares JSON; sin objetos ni listas anidadas.")
+    rows: list[list[JsonScalar]] = Field(
+        description="Celdas escalares JSON; sin objetos ni listas anidadas."
+    )
     truncated: bool = Field(description="Indica si se omitieron filas por el límite de resultados.")
 
     @field_validator("rows", mode="before")

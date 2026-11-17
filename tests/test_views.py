@@ -20,7 +20,12 @@ TOP_QUERY = """SELECT cliente_id, nombre, numero_pedidos, importe_total_centavos
 def test_known_monthly_totals_exclude_non_sales_and_use_completion_month(tmp_path):
     database_path = tmp_path / "orders.sqlite3"
     summary = clean_to_sqlite(FIXTURE_PATH, database_path)
-    assert (summary["total"], summary["accepted"], summary["rejected"], summary["duplicate"]) == (19, 16, 2, 1)
+    assert (summary["total"], summary["accepted"], summary["rejected"], summary["duplicate"]) == (
+        19,
+        16,
+        2,
+        1,
+    )
     with closing(sqlite3.connect(database_path)) as connection:
         assert connection.execute(MONTHLY_QUERY).fetchall() == [
             ("2024-03", "España", 1, 500, "USD"),
@@ -29,7 +34,12 @@ def test_known_monthly_totals_exclude_non_sales_and_use_completion_month(tmp_pat
             ("2025-04", "España", 1, 10000, "USD"),
         ]
         # Valid pending/cancelled orders remain available in the underlying table.
-        assert connection.execute("SELECT COUNT(*) FROM pedidos WHERE estado != 'completado'").fetchone()[0] == 2
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM pedidos WHERE estado != 'completado'"
+            ).fetchone()[0]
+            == 2
+        )
 
 
 def test_top_ten_ties_and_same_name_different_customer_ids(tmp_path):
@@ -57,8 +67,12 @@ def test_views_are_reproducible_after_reload_in_reverse_order(tmp_path):
     for ordered_rows in (raw_rows, list(reversed(raw_rows))):
         save_sqlite(classify_rows(ordered_rows), database_path)
         with closing(sqlite3.connect(database_path)) as connection:
-            snapshots.append((connection.execute(MONTHLY_QUERY).fetchall(),
-                              connection.execute(TOP_QUERY).fetchall()))
+            snapshots.append(
+                (
+                    connection.execute(MONTHLY_QUERY).fetchall(),
+                    connection.execute(TOP_QUERY).fetchall(),
+                )
+            )
     assert snapshots[0] == snapshots[1]
 
 
@@ -81,10 +95,13 @@ def test_no_sales_produces_empty_views(tmp_path, include_non_sales):
         assert connection.execute(TOP_QUERY).fetchall() == []
 
 
-@pytest.mark.parametrize("broken_sql", [
-    "DROP VIEW top_10_clientes;\nTHIS IS INVALID;\n",
-    "DROP VIEW top_10_clientes;\nCREATE VIEW top_10_clientes AS SELECT nonexistent FROM pedidos;\n",
-])
+@pytest.mark.parametrize(
+    "broken_sql",
+    [
+        "DROP VIEW top_10_clientes;\nTHIS IS INVALID;\n",
+        "DROP VIEW top_10_clientes;\nCREATE VIEW top_10_clientes AS SELECT nonexistent FROM pedidos;\n",
+    ],
+)
 def test_broken_views_roll_back_data_and_previous_views(tmp_path, monkeypatch, broken_sql):
     database_path = tmp_path / "orders.sqlite3"
     clean_to_sqlite(FIXTURE_PATH, database_path)

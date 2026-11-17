@@ -4,7 +4,14 @@ from pathlib import Path
 from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import AnyHttpUrl, Field, SecretStr, StringConstraints, ValidationError, field_validator
+from pydantic import (
+    AnyHttpUrl,
+    Field,
+    SecretStr,
+    StringConstraints,
+    ValidationError,
+    field_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from errors import QueryServiceNotReadyError
@@ -16,7 +23,10 @@ DOTENV_PATH = PROJECT_ROOT / ".env"
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="OPENAI_", populate_by_name=True, extra="ignore", allow_inf_nan=False,
+        env_prefix="OPENAI_",
+        populate_by_name=True,
+        extra="ignore",
+        allow_inf_nan=False,
     )
 
     api_key: SecretStr
@@ -27,7 +37,8 @@ class Settings(BaseSettings):
     max_retries: int = Field(default=2, ge=0, le=5)
     timezone: str = Field(default="America/Mexico_City", validation_alias="APP_TIMEZONE")
     database_path: Path = Field(
-        default=PROJECT_ROOT / "data" / "processed" / "pedidos.sqlite3", validation_alias="DATABASE_PATH",
+        default=PROJECT_ROOT / "data" / "processed" / "pedidos.sqlite3",
+        validation_alias="DATABASE_PATH",
     )
 
     @field_validator("api_key")

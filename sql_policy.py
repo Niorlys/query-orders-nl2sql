@@ -8,27 +8,103 @@ from errors import SQLPolicyViolationError
 
 
 ALLOWED_RELATIONS = frozenset({"pedidos", "ventas_por_mes_pais", "top_10_clientes"})
-ALLOWED_FUNCTIONS = frozenset({
-    "count", "sum", "avg", "min", "max", "round", "abs", "coalesce", "nullif",
-    "lower", "upper", "length", "substr", "substring", "strftime", "date",
-    "like",  # SQLite authorizes the LIKE operator as a function.
-})
-ALLOWED_NODES = frozenset({
-    exp.Select, exp.From, exp.Table, exp.TableAlias, exp.Identifier, exp.Column,
-    exp.Star, exp.Alias, exp.Literal, exp.Null, exp.Boolean, exp.Paren,
-    exp.Where, exp.Group, exp.Having, exp.Order, exp.Ordered, exp.Limit, exp.Offset,
-    exp.Distinct, exp.Join, exp.Subquery, exp.Exists,
-    exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.And, exp.Or, exp.Not,
-    exp.Is, exp.In, exp.Between, exp.Like,
-    exp.Add, exp.Sub, exp.Mul, exp.Div, exp.Mod, exp.Neg,
-    exp.Count, exp.Sum, exp.Avg, exp.Min, exp.Max, exp.Round, exp.Abs,
-    exp.Coalesce, exp.Nullif, exp.Lower, exp.Upper, exp.Length, exp.Substring,
-    exp.TimeToStr, exp.TsOrDsToTimestamp, exp.Date,
-})
-SELECT_ARGUMENTS = frozenset({
-    "expressions", "from_", "joins", "where", "group", "having", "order",
-    "limit", "offset", "distinct",
-})
+ALLOWED_FUNCTIONS = frozenset(
+    {
+        "count",
+        "sum",
+        "avg",
+        "min",
+        "max",
+        "round",
+        "abs",
+        "coalesce",
+        "nullif",
+        "lower",
+        "upper",
+        "length",
+        "substr",
+        "substring",
+        "strftime",
+        "date",
+        "like",  # SQLite authorizes the LIKE operator as a function.
+    }
+)
+ALLOWED_NODES = frozenset(
+    {
+        exp.Select,
+        exp.From,
+        exp.Table,
+        exp.TableAlias,
+        exp.Identifier,
+        exp.Column,
+        exp.Star,
+        exp.Alias,
+        exp.Literal,
+        exp.Null,
+        exp.Boolean,
+        exp.Paren,
+        exp.Where,
+        exp.Group,
+        exp.Having,
+        exp.Order,
+        exp.Ordered,
+        exp.Limit,
+        exp.Offset,
+        exp.Distinct,
+        exp.Join,
+        exp.Subquery,
+        exp.Exists,
+        exp.EQ,
+        exp.NEQ,
+        exp.GT,
+        exp.GTE,
+        exp.LT,
+        exp.LTE,
+        exp.And,
+        exp.Or,
+        exp.Not,
+        exp.Is,
+        exp.In,
+        exp.Between,
+        exp.Like,
+        exp.Add,
+        exp.Sub,
+        exp.Mul,
+        exp.Div,
+        exp.Mod,
+        exp.Neg,
+        exp.Count,
+        exp.Sum,
+        exp.Avg,
+        exp.Min,
+        exp.Max,
+        exp.Round,
+        exp.Abs,
+        exp.Coalesce,
+        exp.Nullif,
+        exp.Lower,
+        exp.Upper,
+        exp.Length,
+        exp.Substring,
+        exp.TimeToStr,
+        exp.TsOrDsToTimestamp,
+        exp.Date,
+    }
+)
+SELECT_ARGUMENTS = frozenset(
+    {
+        "expressions",
+        "from_",
+        "joins",
+        "where",
+        "group",
+        "having",
+        "order",
+        "limit",
+        "offset",
+        "distinct",
+    }
+)
 MAX_SQL_BYTES = 16384
 MAX_AST_NODES = 500
 MAX_AST_DEPTH = 50
@@ -58,15 +134,19 @@ def validate_sql(sql: str) -> str:
         if isinstance(node, exp.Func) and "start" in node.meta and "end" in node.meta:
             # Some aliases (e.g. NVL/IFNULL) normalize to the same AST as COALESCE.
             # Check the original function spelling too, when retained by the parser.
-            spelling = sql[node.meta["start"]:node.meta["end"] + 1].strip('"`[]').lower()
+            spelling = sql[node.meta["start"] : node.meta["end"] + 1].strip('"`[]').lower()
             if spelling not in ALLOWED_FUNCTIONS:
                 raise SQLPolicyViolationError("Function name is not allowed")
         if isinstance(node, exp.Select):
             if any(value and key not in SELECT_ARGUMENTS for key, value in node.args.items()):
                 raise SQLPolicyViolationError("Unsupported SELECT clause")
         if isinstance(node, exp.Table):
-            if (type(node.this) is not exp.Identifier or node.db or node.catalog
-                    or node.name.lower() not in ALLOWED_RELATIONS):
+            if (
+                type(node.this) is not exp.Identifier
+                or node.db
+                or node.catalog
+                or node.name.lower() not in ALLOWED_RELATIONS
+            ):
                 raise SQLPolicyViolationError("Forbidden relation or qualified database")
         if isinstance(node, exp.Column) and (node.db or node.catalog):
             raise SQLPolicyViolationError("Qualified databases are not allowed")

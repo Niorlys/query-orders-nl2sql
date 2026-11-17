@@ -13,18 +13,33 @@ from typing import Iterable, Mapping
 
 
 COUNTRY_ALIASES = {
-    "espana": "España", "es": "España",
-    "mexico": "México", "mx": "México",
-    "argentina": "Argentina", "ar": "Argentina",
-    "colombia": "Colombia", "co": "Colombia",
-    "chile": "Chile", "cl": "Chile",
-    "estados unidos": "Estados Unidos", "usa": "Estados Unidos",
-    "us": "Estados Unidos", "united states": "Estados Unidos",
+    "espana": "España",
+    "es": "España",
+    "mexico": "México",
+    "mx": "México",
+    "argentina": "Argentina",
+    "ar": "Argentina",
+    "colombia": "Colombia",
+    "co": "Colombia",
+    "chile": "Chile",
+    "cl": "Chile",
+    "estados unidos": "Estados Unidos",
+    "usa": "Estados Unidos",
+    "us": "Estados Unidos",
+    "united states": "Estados Unidos",
 }
 STATUSES = {"pendiente", "completado", "cancelado"}
 RAW_FIELDS = {
-    "pedido_id", "fecha", "fecha_completado", "cliente", "país",
-    "producto", "importe", "moneda", "estado", "cliente_id",
+    "pedido_id",
+    "fecha",
+    "fecha_completado",
+    "cliente",
+    "país",
+    "producto",
+    "importe",
+    "moneda",
+    "estado",
+    "cliente_id",
 }
 DATE_FORMATS = (
     (r"[0-9]{4}-[0-9]{2}-[0-9]{2}", "%Y-%m-%d"),
@@ -43,8 +58,11 @@ def normalize_text(value: str | None) -> str:
 
 def normalize_country(value: str | None) -> str:
     text = normalize_text(value).casefold()
-    key = "".join(character for character in unicodedata.normalize("NFD", text)
-                  if not unicodedata.combining(character))
+    key = "".join(
+        character
+        for character in unicodedata.normalize("NFD", text)
+        if not unicodedata.combining(character)
+    )
     if key not in COUNTRY_ALIASES:
         raise ValueError("unknown_country")
     return COUNTRY_ALIASES[key]
@@ -129,9 +147,12 @@ def normalize_row(row: Mapping[str, str | None], row_number: int) -> NormalizedR
         reasons.append(f"{field}:missing_field")
 
     parsers = {
-        "pedido_id": normalize_order_id, "país": normalize_country,
+        "pedido_id": normalize_order_id,
+        "país": normalize_country,
         "cliente_id": normalize_customer_id,
-        "estado": normalize_status, "fecha": parse_date, "importe": parse_amount_cents,
+        "estado": normalize_status,
+        "fecha": parse_date,
+        "importe": parse_amount_cents,
     }
     for field, parser in parsers.items():
         try:
@@ -159,15 +180,20 @@ def normalize_row(row: Mapping[str, str | None], row_number: int) -> NormalizedR
         reasons.append("fecha_completado:required_for_completed")
     if status in {"pendiente", "cancelado"} and completed_text:
         reasons.append("fecha_completado:unexpected_for_status")
-    if (completed_text and "fecha:invalid_date" not in reasons
-            and "fecha_completado:invalid_date" not in reasons
-            and normalized["fecha_completado"] < normalized["fecha"]):
+    if (
+        completed_text
+        and "fecha:invalid_date" not in reasons
+        and "fecha_completado:invalid_date" not in reasons
+        and normalized["fecha_completado"] < normalized["fecha"]
+    ):
         reasons.append("fecha_completado:before_creation")
     return NormalizedRow(row_number, original, normalized, reasons)
 
 
 def classify_rows(
-    rows: Iterable[Mapping[str, str | None]], *, first_row_number: int = 2,
+    rows: Iterable[Mapping[str, str | None]],
+    *,
+    first_row_number: int = 2,
 ) -> list[ClassifiedRow]:
     """Reject all conflicting ID versions; otherwise deduplicate before quality rejection.
 
@@ -175,8 +201,9 @@ def classify_rows(
     are always rejected individually. Row numbers are logical CSV records including
     the header, not physical lines (a quoted CSV value may span several lines).
     """
-    prepared = [normalize_row(row, number)
-                for number, row in enumerate(rows, start=first_row_number)]
+    prepared = [
+        normalize_row(row, number) for number, row in enumerate(rows, start=first_row_number)
+    ]
     groups = defaultdict(list)
     for record in prepared:
         if "pedido_id:invalid_order_id" not in record.reasons:
@@ -185,10 +212,13 @@ def classify_rows(
     for order_id, group in groups.items():
         first = group[0]
         # Reasons distinguish schema defects even if missing/blank values normalize alike.
-        if any(record.normalized != first.normalized or record.reasons != first.reasons
-               or {key: value for key, value in record.original.items() if key not in RAW_FIELDS}
-               != {key: value for key, value in first.original.items() if key not in RAW_FIELDS}
-               for record in group[1:]):
+        if any(
+            record.normalized != first.normalized
+            or record.reasons != first.reasons
+            or {key: value for key, value in record.original.items() if key not in RAW_FIELDS}
+            != {key: value for key, value in first.original.items() if key not in RAW_FIELDS}
+            for record in group[1:]
+        ):
             conflicting_ids.add(order_id)
 
     results = []
@@ -207,9 +237,16 @@ def classify_rows(
             reasons.append("pedido_id:duplicate")
         else:
             category = "rejected" if reasons else "accepted"
-        results.append(ClassifiedRow(
-            record.row_number, record.original, record.normalized, reasons, category, duplicate_of,
-        ))
+        results.append(
+            ClassifiedRow(
+                record.row_number,
+                record.original,
+                record.normalized,
+                reasons,
+                category,
+                duplicate_of,
+            )
+        )
     return results
 
 
@@ -218,10 +255,17 @@ def summarize_rows(rows: Iterable[ClassifiedRow]) -> dict:
     counts = Counter(record.category for record in records)
     return {
         "total": len(records),
-        "accepted": counts["accepted"], "duplicate": counts["duplicate"],
+        "accepted": counts["accepted"],
+        "duplicate": counts["duplicate"],
         "rejected": counts["rejected"],
-        "rejection_reasons": dict(sorted(Counter(
-            reason for record in records if record.category == "rejected"
-            for reason in record.reasons
-        ).items())),
+        "rejection_reasons": dict(
+            sorted(
+                Counter(
+                    reason
+                    for record in records
+                    if record.category == "rejected"
+                    for reason in record.reasons
+                ).items()
+            )
+        ),
     }

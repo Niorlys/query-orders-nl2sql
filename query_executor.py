@@ -9,7 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from errors import (
-    InternalServerError, InvalidLLMResponseError, QueryResourceLimitError, SQLPolicyViolationError,
+    InternalServerError,
+    InvalidLLMResponseError,
+    QueryResourceLimitError,
+    SQLPolicyViolationError,
 )
 from schemas import QueryResponse
 from sql_policy import ALLOWED_FUNCTIONS, ALLOWED_RELATIONS, MAX_SQL_BYTES, validate_sql
@@ -28,7 +31,13 @@ class ExecutionLimits:
     max_value_bytes: int = 1048576
 
     def __post_init__(self):
-        for name in ("max_rows", "max_response_bytes", "max_vm_steps", "progress_interval", "max_value_bytes"):
+        for name in (
+            "max_rows",
+            "max_response_bytes",
+            "max_vm_steps",
+            "progress_interval",
+            "max_value_bytes",
+        ):
             value = getattr(self, name)
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
@@ -62,7 +71,9 @@ class ReadOnlyAuthorizer:
 @contextmanager
 def readonly_connection(database_path: Path, limits: ExecutionLimits):
     uri = Path(database_path).resolve().as_uri() + "?mode=ro"
-    connection = sqlite3.connect(uri, uri=True, timeout=min(limits.timeout_seconds, 1.0), cached_statements=0)
+    connection = sqlite3.connect(
+        uri, uri=True, timeout=min(limits.timeout_seconds, 1.0), cached_statements=0
+    )
     try:
         # Trusted setup precedes installation of the deny-by-default authorizer.
         connection.execute("PRAGMA query_only = ON")
@@ -102,11 +113,18 @@ class ExecutionBudget:
 
 def json_size(value) -> int:
     # Same UTF-8 JSON options as JSONResponse; include envelope and column names.
-    return len(json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8"))
+    return len(
+        json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    )
 
 
 def execute_query(
-    sql: str, database_path: Path, *, limits: ExecutionLimits | None = None,
+    sql: str,
+    database_path: Path,
+    *,
+    limits: ExecutionLimits | None = None,
 ) -> QueryResponse:
     sql = validate_sql(sql)
     limits = limits or ExecutionLimits()
@@ -132,8 +150,11 @@ def execute_query(
                 if len(rows) >= limits.max_rows:
                     truncated = True
                     break
-                if any(type(cell) not in (str, int, float, bool, type(None))
-                       or (isinstance(cell, float) and not math.isfinite(cell)) for cell in row):
+                if any(
+                    type(cell) not in (str, int, float, bool, type(None))
+                    or (isinstance(cell, float) and not math.isfinite(cell))
+                    for cell in row
+                ):
                     raise InvalidLLMResponseError("Query returned a non-JSON scalar")
                 row = list(row)
                 additional_size = json_size(row) + (1 if rows else 0)

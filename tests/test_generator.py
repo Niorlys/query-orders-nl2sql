@@ -24,7 +24,10 @@ def test_two_cli_runs_are_byte_identical(tmp_path):
     for directory in (tmp_path / "first", tmp_path / "second"):
         subprocess.run(
             [sys.executable, str(script), "generate", "--output-dir", str(directory)],
-            cwd=tmp_path, check=True, capture_output=True, text=True,
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
         )
     for filename in ("pedidos.csv", "manifest.json"):
         assert (tmp_path / "first" / filename).read_bytes() == (
@@ -47,9 +50,10 @@ def test_manifest_matches_csv_and_exact_duplicates(tmp_path):
         str(index) for index in range(1, original_count + 1)
     ]
     for duplicate in manifest["duplicates"]:
-        assert rows[duplicate["source_csv_row_number"] - 2] == rows[
-            duplicate["duplicate_csv_row_number"] - 2
-        ]
+        assert (
+            rows[duplicate["source_csv_row_number"] - 2]
+            == rows[duplicate["duplicate_csv_row_number"] - 2]
+        )
 
 
 def test_error_counts_and_business_rules():
@@ -94,7 +98,9 @@ def test_error_counts_and_business_rules():
                 accepted_statuses[status] += 1
         assert len(invalid_ids) == counts["invalid_date"]
         assert len(empty_ids) == counts["empty_amount"]
-        assert manifest["invalid_date_and_empty_amount_overlap_count"] == len(invalid_ids & empty_ids)
+        assert manifest["invalid_date_and_empty_amount_overlap_count"] == len(
+            invalid_ids & empty_ids
+        )
         expected = manifest["expected_after_deduplication"]
         assert set(expected["rejected_order_ids"]) == invalid_ids | empty_ids
         assert expected["rejected_order_count"] == len(invalid_ids | empty_ids)
@@ -102,18 +108,32 @@ def test_error_counts_and_business_rules():
         assert expected["accepted_status_counts"] == dict(accepted_statuses)
 
         original_rows = rows[:original_count]
-        assert sum(row["país"] not in COUNTRY_VARIANTS for row in original_rows) == counts["country_variant"]
-        assert sum(any(row[field] != row[field].strip() for field in ("cliente", "producto", "estado"))
-                   for row in original_rows) == counts["whitespace"]
-        formatted_count = sum(any("/" in row[field] for field in ("fecha", "fecha_completado"))
-                              for row in original_rows)
+        assert (
+            sum(row["país"] not in COUNTRY_VARIANTS for row in original_rows)
+            == counts["country_variant"]
+        )
+        assert (
+            sum(
+                any(row[field] != row[field].strip() for field in ("cliente", "producto", "estado"))
+                for row in original_rows
+            )
+            == counts["whitespace"]
+        )
+        formatted_count = sum(
+            any("/" in row[field] for field in ("fecha", "fecha_completado"))
+            for row in original_rows
+        )
         # Invalid dates can overwrite a previously injected complete date format.
-        assert formatted_count <= counts["complete_date_format"] <= formatted_count + counts["invalid_date"]
+        assert (
+            formatted_count
+            <= counts["complete_date_format"]
+            <= formatted_count + counts["invalid_date"]
+        )
 
 
 def test_manifest_errors_match_actual_rejection_reasons():
     rows, manifest = generate_dataset()
-    original_rows = rows[:manifest["original_order_count"]]
+    original_rows = rows[: manifest["original_order_count"]]
     actual_errors = []
     for row in original_rows:
         fields = ["fecha"]

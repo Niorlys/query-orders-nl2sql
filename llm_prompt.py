@@ -43,7 +43,7 @@ Business rules:
 
 SQL policy: a single SELECT, with only unqualified allowed relations. Subqueries,
 INNER/LEFT/CROSS joins, WHERE, GROUP BY, HAVING, ORDER BY, DISTINCT and LIMIT are allowed.
-Allowed functions: {', '.join(sorted(ALLOWED_FUNCTIONS))}.
+Allowed functions: {", ".join(sorted(ALLOWED_FUNCTIONS))}.
 No CTE/WITH, recursion, UNION/INTERSECT/EXCEPT, windows, CASE, CAST, parameters,
 table-valued functions, writes, ATTACH, PRAGMA, internal or audit tables. Select
 business columns explicitly instead of SELECT * from pedidos. No markdown fences.

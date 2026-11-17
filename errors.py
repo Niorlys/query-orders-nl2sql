@@ -80,13 +80,17 @@ class InternalServerError(AppError):
 
 
 def error_response(
-    error: AppError, *, details: list[ValidationIssue] | None = None,
-    headers: dict[str, str] | None = None, status_code: int | None = None,
+    error: AppError,
+    *,
+    details: list[ValidationIssue] | None = None,
+    headers: dict[str, str] | None = None,
+    status_code: int | None = None,
 ) -> JSONResponse:
     body = ErrorResponse(code=error.code, message=error.public_message, details=details or [])
     return JSONResponse(
         status_code=status_code if status_code is not None else error.status_code,
-        content=body.model_dump(mode="json"), headers=headers,
+        content=body.model_dump(mode="json"),
+        headers=headers,
     )
 
 
@@ -106,8 +110,10 @@ class PublicHTTPError(AppError):
     def __init__(self, status_code: int):
         self.status_code = status_code
         self.public_message = {
-            400: "Solicitud HTTP no válida.", 401: "Autenticación requerida.",
-            403: "Acceso no permitido.", 404: "Ruta no encontrada.",
+            400: "Solicitud HTTP no válida.",
+            401: "Autenticación requerida.",
+            403: "Acceso no permitido.",
+            404: "Ruta no encontrada.",
             405: "Método HTTP no permitido.",
         }.get(status_code, "La solicitud HTTP no pudo completarse.")
         super().__init__()
@@ -122,17 +128,23 @@ def install_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, error: RequestValidationError):
-        details = [ValidationIssue(
-            location=list(issue["loc"]), code=issue["type"],
-            message=VALIDATION_MESSAGES.get(issue["type"], "Valor no válido para este campo."),
-        ) for issue in error.errors()]
+        details = [
+            ValidationIssue(
+                location=list(issue["loc"]),
+                code=issue["type"],
+                message=VALIDATION_MESSAGES.get(issue["type"], "Valor no válido para este campo."),
+            )
+            for issue in error.errors()
+        ]
         return error_response(InvalidInputError(), details=details)
 
     @app.exception_handler(HTTPException)
     async def handle_http_error(request: Request, error: HTTPException):
         mapped_errors = {
-            422: InvalidInputError, 502: InvalidLLMResponseError,
-            503: ProviderUnavailableError, 504: ProviderTimeoutError,
+            422: InvalidInputError,
+            502: InvalidLLMResponseError,
+            503: ProviderUnavailableError,
+            504: ProviderTimeoutError,
         }
         if error.status_code in mapped_errors:
             public_error = mapped_errors[error.status_code]()
@@ -150,9 +162,18 @@ def install_error_handlers(app: FastAPI) -> None:
 
 
 ERROR_RESPONSES = {
-    422: {"model": ErrorResponse, "description": "Entrada inválida, pregunta fuera de alcance o ambigua."},
-    502: {"model": ErrorResponse, "description": "Respuesta del LLM inválida, SQL fuera de política o presupuesto excedido."},
-    503: {"model": ErrorResponse, "description": "Proveedor temporalmente no disponible o servicio aún no configurado."},
+    422: {
+        "model": ErrorResponse,
+        "description": "Entrada inválida, pregunta fuera de alcance o ambigua.",
+    },
+    502: {
+        "model": ErrorResponse,
+        "description": "Respuesta del LLM inválida, SQL fuera de política o presupuesto excedido.",
+    },
+    503: {
+        "model": ErrorResponse,
+        "description": "Proveedor temporalmente no disponible o servicio aún no configurado.",
+    },
     504: {"model": ErrorResponse, "description": "Timeout del proveedor."},
     500: {"model": ErrorResponse, "description": "Fallo interno; mensaje público genérico."},
     400: {"model": ErrorResponse, "description": "Solicitud HTTP inválida."},
