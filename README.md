@@ -68,6 +68,116 @@ corresponde al dataset sintético completo; el fixture pequeño de las pruebas
 tiene otros totales. Abre [Swagger UI](http://127.0.0.1:8000/docs) para consultar
 los contratos. Detén el servidor con Ctrl+C.
 
+## Ejecución con Docker
+
+Necesitas Docker Engine o Docker Desktop/OrbStack **en ejecución**. Compruébalo
+con `docker version`: deben aparecer cliente y servidor. Los siguientes comandos
+son para macOS/Linux, desde la raíz del repositorio; no requieren instalar las
+dependencias Python en el host.
+
+La imagen usa **Python 3.13.12 slim-bookworm**, fijado también por digest, y
+**uv 0.10.4**, copiado de la imagen oficial de Astral. Las dependencias se instalan
+con `uv pip install --system -r requirements.txt`, respetando las versiones
+exactas de `constraints.txt`, y se comprueban con `uv pip check --system`.
+La interfaz `uv pip` ejecuta uv; no invoca el instalador pip. Se desactivan la
+caché y las descargas de Python para utilizar el intérprete de la imagen base.
+`.dockerignore` excluye todo salvo una lista explícita de
+fuentes y dependencias: no entran `.env`, credenciales, datos, `.git`, entornos
+virtuales, cachés ni tests. La construcción no recibe la API key.
+
+```bash
+# 1. Construir la imagen y preparar el directorio persistente.
+docker build -t ventas-demo .
+mkdir -p data
+
+# 2. Generar CSV y manifiesto. No llama al proveedor.
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --mount "type=bind,source=$PWD/data,target=/app/data" \
+  ventas-demo python manage.py generate
+
+# 3. Limpiar y cargar SQLite. No llama al proveedor.
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --mount "type=bind,source=$PWD/data,target=/app/data" \
+  ventas-demo python manage.py clean
+
+# 4. Arrancar únicamente la API con datos de solo lectura.
+# Antes, crea .env desde .env.example si no existe y configura tu proveedor.
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --env-file .env \
+  -e DATABASE_PATH=/app/data/processed/pedidos.sqlite3 \
+  -p 127.0.0.1:8000:8000 \
+  --mount "type=bind,source=$PWD/data,target=/app/data,readonly" \
+  ventas-demo
+```
+
+El último comando usa el `CMD` de la imagen:
+`python -m uvicorn main:app --host 0.0.0.0 --port 8000`.
+**Arrancar o reiniciar la API no genera el CSV ni crea, carga o reemplaza la base.**
+La carga es una acción explícita del paso 3. Detén la API antes de reemplazar
+el dataset para que las consultas de la demostración utilicen una versión estable.
+
+Los archivos persisten en el host al eliminar el contenedor:
+
+| Host | Contenedor | Contenido |
+| --- | --- | --- |
+| `data/raw/` | `/app/data/raw/` | CSV y manifiesto |
+| `data/processed/` | `/app/data/processed/` | SQLite |
+
+El montaje de generación/carga permite escribir; el montaje de la API es
+`readonly`, además de la conexión SQLite de solo lectura. `--user` mantiene
+el UID/GID de tu usuario para evitar archivos propiedad de root y problemas al
+leer directorios privados. La imagen tiene un usuario numérico no root por
+defecto (10001), sustituido por el UID/GID del host en estos comandos.
+
+`--env-file .env` proporciona `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_BASE_URL`,
+timeouts, reintentos y zona horaria en el arranque. Ese archivo no se monta ni se
+copia dentro de la imagen. Usa líneas simples `VARIABLE=valor`, como en
+`.env.example`. `-e DATABASE_PATH=...` fija la ruta **dentro del contenedor** y
+prevalece sobre una ruta de tu host o un nombre anterior guardado en `.env`.
+
+En otra terminal, prueba el mismo `curl` del inicio rápido o abre
+[Swagger UI](http://127.0.0.1:8000/docs). Con la semilla predeterminada, la
+pregunta de ventas de España en marzo de 2025 debe devolver 98.900 centavos.
+Ctrl+C detiene el contenedor; los datos del host permanecen. Si ya tienes otro
+servidor en el puerto 8000, usa `-p 127.0.0.1:8001:8000` y consulta el puerto 8001.
+
+Si solo quieres verificar contratos sin una clave, puedes omitir `--env-file`:
+`/docs` funciona, las preguntas vacías devuelven 422 y las válidas devuelven 503
+`service_not_ready`. Si la base no está cargada, la API no la crea automáticamente.
+
+### Verificación automática de Docker
+
+Después de construir la imagen, con Python 3.11+ en el host:
+
+```bash
+python3 tests/docker_smoke.py ventas-demo
+```
+
+Esta comprobación usa un directorio temporal, sin leer `.env` ni tocar `data/`.
+Genera dos veces y compara hashes, carga dos veces y compara el contenido lógico
+de SQLite, arranca el `CMD` real, comprueba respuestas HTTP y ejecuta una consulta
+de ventas mediante el ejecutor seguro dentro del contenedor. También intenta
+escribir en el montaje de solo lectura y exige que falle, comprueba que la imagen
+no contiene configuración ni datos locales y verifica que los hashes de los
+archivos persistidos no cambien al arrancar y utilizar la API. El contenedor y
+los archivos temporales se eliminan al terminar. No realiza llamadas a OpenAI.
+
+El job `docker` de GitHub Actions construye la imagen y ejecuta esta comprobación,
+separado de pytest. La prueba de integración real con el LLM sigue siendo manual
+y se reproduce con `--env-file .env` y las preguntas de esta guía.
+
+Verificación local: la imagen construida con uv pasó todas estas comprobaciones
+en OrbStack (Linux ARM64), incluidas la consulta de 98.900 centavos y la denegación
+de escritura. Los datos conservaron sus hashes al arrancar y utilizar la API.
+La CI verificará también la construcción y ejecución en el runner Linux de GitHub.
+
+Referencias: [construcción de imágenes](https://docs.docker.com/build/building/best-practices/),
+[uv en Docker](https://docs.astral.sh/uv/guides/integration/docker/)
+y [montajes de solo lectura](https://docs.docker.com/engine/storage/bind-mounts/).
+
 ## Demostración: seguridad y corrección de respuestas
 
 **Una consulta segura puede interpretar mal la pregunta.** El validador impide

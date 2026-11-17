@@ -40,3 +40,16 @@ jobs:
           python manage.py generate
           python manage.py clean
           python manage.py clean
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build runtime image without credentials
+        run: docker build -t ventas-demo .
+      - name: Verify generation, loading and read-only API
+        run: python tests/docker_smoke.py ventas-demo
