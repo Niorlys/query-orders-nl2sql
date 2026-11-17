@@ -378,6 +378,44 @@ fechas Python, bytes, `Decimal`, `NaN` ni infinitos. `truncated` es un booleano
 obligatorio que indica si el ejecutor omitió filas por límites de cantidad o
 tamaño. El endpoint usa siempre ese ejecutor para el SQL propuesto por el modelo.
 
+El recorrido completo es:
+
+`QueryRequest → query_service → OpenAI → LLMDecision (Pydantic) → validación SQL → SQLite de solo lectura → QueryResponse`
+
+El endpoint devuelve directamente el modelo Pydantic; la coordinación vive en
+`query_service.py`. Una consulta sin coincidencias devuelve **200**, con sus
+`columns`, `rows: []` y `truncated: false`. Una suma sin filas puede devolver
+`[[null]]`, o `[[0]]` si el SQL usa `COALESCE`; ambos son resultados válidos y
+no provocan reintentos del proveedor. Los errores no incluyen trazas, salida
+cruda del modelo ni SQL rechazado.
+
+### Verificar el flujo completo
+
+```bash
+.venv/bin/python -m pytest tests/test_query_e2e.py -v
+```
+
+Estas pruebas cargan `tests/fixtures/orders_views.csv` en SQLite temporal y
+llaman a `POST /query` simulando únicamente el transporte HTTP del proveedor.
+El SDK, la validación Pydantic, la validación SQL y el ejecutor son los reales.
+No necesitas API key ni modificar tu base de datos. Los resultados esperados
+se fijan a mano:
+
+- España, marzo de 2025: 11 ventas completadas y 24.000 centavos USD (240 USD).
+- España, abril de 2025: una venta de 10.000 centavos, creada en marzo y completada en abril.
+- Ranking: cliente 2 antes del 1 por número de pedidos al empatar en importe;
+  desempates posteriores por ID, con un máximo de diez clientes.
+- Enero de 2023: sin filas; también se verifican sumas vacías con `null` y cero.
+- Preguntas fuera de alcance o ambiguas: 422. Salidas mal formadas, escrituras
+  y accesos a rechazos o tablas internas, incluso en subconsultas: 502.
+
+También se verifica que los rechazos ocurran antes de abrir SQLite, que el
+archivo de la base permanezca idéntico y que los errores solo contengan el
+contrato público. Esto comprueba la integración con respuestas controladas;
+no demuestra que un modelo real interprete correctamente cualquier pregunta.
+
+### Contrato de errores
+
 Todos los errores usan `ErrorResponse`, construido con Pydantic y serializado
 con `model_dump(mode="json")` mediante una única función que devuelve
 `JSONResponse`. Su estructura es siempre `code`, `message` y `details`:
@@ -535,7 +573,7 @@ El presupuesto SQL es independiente y se aplica después de obtener una propuest
 
 ```bash
 .venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m pytest tests/test_llm_provider.py tests/test_api.py -v
+.venv/bin/python -m pytest tests/test_llm_provider.py tests/test_api.py tests/test_query_e2e.py -v
 ```
 
 `tests/conftest.py` aísla `.env`, elimina las variables de credenciales durante
@@ -764,3 +802,7 @@ reintentar se corrigió siguiendo la tabla del usuario: reintentos limitados par
 fallos transitorios, respeto de Retry-After y como máximo uno para timeout,
 sin regeneración de SQL inválido. Se aceptó el flujo de salida validada por
 Pydantic y ejecución únicamente mediante la capa de seguridad existente.
+Al verificar el endpoint de extremo a extremo, se conservó esa conexión ya
+implementada y se ampliaron los tests con SQLite temporal, ranking, ausencia
+de datos y accesos prohibidos. Se corrigió la cobertura: los tests anteriores
+no comprobaban el ranking ni los resultados vacíos a través del endpoint real.

@@ -1,7 +1,6 @@
 import asyncio
 import json
 from datetime import date, datetime, timezone
-from pathlib import Path
 
 import httpx2 as httpx
 import pytest
@@ -16,12 +15,10 @@ from errors import (
 )
 from llm_provider import LLMDecision, OpenAIProvider, retry_after_seconds
 from main import create_app
-from storage import clean_to_sqlite
 
 
 QUERY = "SELECT COALESCE(SUM(importe_total_centavos),0) AS total_centavos FROM ventas_por_mes_pais WHERE país='España' AND anio_mes='2025-03'"
 DECISION = {"status": "query", "sql": QUERY, "reason": None}
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "orders_views.csv"
 
 
 def envelope(decision=DECISION):
@@ -213,44 +210,6 @@ def test_total_deadline_cancels_a_slow_provider():
     with pytest.raises(ProviderTimeoutError):
         asyncio.run(run())
     assert len(calls) == 1
-
-
-@pytest.mark.parametrize(("decision", "http_status", "code"), [
-    (DECISION, 200, None),
-    ({"status": "query", "sql": "DELETE FROM pedidos", "reason": None}, 502, "sql_policy_violation"),
-    ({"status": "query", "sql": "SELECT * FROM pedidos_rechazados", "reason": None}, 502, "sql_policy_violation"),
-    ({"status": "unanswerable", "sql": None, "reason": "out_of_scope"}, 422, "out_of_scope"),
-    ({"status": "unanswerable", "sql": None, "reason": "ambiguous"}, 422, "ambiguous_question"),
-    ("bad JSON", 502, "invalid_llm_response"),
-])
-def test_endpoint_through_mocked_sdk_and_real_safe_executor(tmp_path, monkeypatch, decision, http_status, code):
-    database_path = tmp_path / "orders.sqlite3"
-    clean_to_sqlite(FIXTURE_PATH, database_path)
-    original_bytes = database_path.read_bytes()
-    monkeypatch.setenv("OPENAI_API_KEY", "fake-key")
-    monkeypatch.setenv("DATABASE_PATH", str(database_path))
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://provider.example/v1")
-    calls = []
-
-    def handle(request):
-        calls.append(request)
-        return httpx.Response(200, json=envelope(decision))
-
-    def make_client(**options):
-        assert options["max_retries"] == 0  # Only the adapter owns retries.
-        assert options["base_url"] == "https://provider.example/v1"
-        return AsyncOpenAI(**options, http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle)))
-
-    monkeypatch.setattr(query_service, "AsyncOpenAI", make_client)
-    with TestClient(create_app(), raise_server_exceptions=False) as client:
-        response = client.post("/query", json={"question": "Ventas en España en marzo de 2025"})
-    assert response.status_code == http_status, response.text
-    if http_status == 200:
-        assert response.json() == {"columns": ["total_centavos"], "rows": [[24000]], "truncated": False}
-    else:
-        assert response.json()["code"] == code
-    assert len(calls) == 1
-    assert database_path.read_bytes() == original_bytes
 
 
 def test_settings_dotenv_environment_precedence_and_secret_repr(tmp_path, monkeypatch):
