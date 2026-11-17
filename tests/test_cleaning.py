@@ -12,7 +12,7 @@ from generator import DEFAULT_SEED, generate_dataset
 def make_row(**changes):
     row = {
         "pedido_id": "1", "fecha": "2025-03-31", "fecha_completado": "2025-04-02",
-        "cliente": "Cliente Uno", "país": "España", "producto": "Teclado",
+        "cliente_id": "1", "cliente": "Cliente Uno", "país": "España", "producto": "Teclado",
         "importe": "100.00", "moneda": "USD", "estado": "completado",
     }
     return row | changes
@@ -27,7 +27,7 @@ def test_country_normalization(raw, expected):
 
 
 def test_normalization_preserves_original_data():
-    raw = make_row(pedido_id=" 0001 ", cliente="  Cliente\t Uno ", país=" ESPANA ",
+    raw = make_row(pedido_id=" 0001 ", cliente_id=" 001 ", cliente="  Cliente\t Uno ", país=" ESPANA ",
                    estado=" COMPLETADO ", moneda=" usd ", importe=" 100.0 ",
                    fecha="31/03/2025", fecha_completado="2025/04/02")
     untouched = deepcopy(raw)
@@ -143,6 +143,9 @@ def test_uncompleted_orders_are_accepted_with_empty_completion_date(status):
     ({"moneda": "EUR"}, "moneda:unsupported_currency"),
     ({"cliente": " "}, "cliente:required"),
     ({"producto": ""}, "producto:required"),
+    ({"cliente_id": ""}, "cliente_id:invalid_customer_id"),
+    ({"cliente_id": "0"}, "cliente_id:invalid_customer_id"),
+    ({"cliente_id": "abc"}, "cliente_id:invalid_customer_id"),
 ])
 def test_business_validation_reasons(changes, reason):
     record = classify_rows([make_row(**changes)])[0]

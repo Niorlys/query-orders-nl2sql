@@ -10,7 +10,7 @@ import pytest
 
 from cleaning import classify_rows
 from generator import FIELD_NAMES, write_dataset
-from storage import clean_to_sqlite, read_csv_rows, save_sqlite
+from storage import SCHEMA_VERSION, clean_to_sqlite, read_csv_rows, save_sqlite
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "manage.py"
@@ -130,7 +130,7 @@ def test_input_cannot_be_used_as_database(tmp_path):
 
 def test_conflicts_and_extra_cells_are_preserved_in_rejections(tmp_path):
     input_path = tmp_path / "orders.csv"
-    base = ["1", "2025-03-31", "2025-04-02", "Cliente Uno", "España", "Teclado", "100", "USD", "completado"]
+    base = ["1", "2025-03-31", "2025-04-02", "Cliente Uno", "España", "Teclado", "100", "USD", "completado", "1"]
     changed = base.copy()
     changed[6] = "200"
     extra = base.copy()
@@ -156,6 +156,7 @@ def test_conflicts_and_extra_cells_are_preserved_in_rejections(tmp_path):
 @pytest.mark.parametrize(("field", "value"), [
     ("pedido_id", None), ("pedido_id", 0), ("pedido_id", -1), ("pedido_id", 1.5),
     ("pedido_id", "invalid"), ("fecha", None), ("fecha", ""),
+    ("cliente_id", None), ("cliente_id", 0), ("cliente_id", -1), ("cliente_id", 1.5),
     ("cliente", None), ("cliente", ""), ("cliente", " \t\n "),
     ("producto", None), ("producto", ""), ("producto", "   "),
     ("país", None), ("país", ""), ("país", "Unknown"),
@@ -171,7 +172,7 @@ def test_sqlite_rejects_invalid_orders_directly(tmp_path, field, value):
     save_sqlite([], database_path)
     values = {
         "pedido_id": 1, "fecha": "2025-01-01", "fecha_completado": "2025-01-02",
-        "cliente": "Cliente Uno", "país": "España", "producto": "Teclado",
+        "cliente_id": 1, "cliente": "Cliente Uno", "país": "España", "producto": "Teclado",
         "importe_centavos": 10000, "moneda": "USD", "estado": "completado",
         "row_number": 2, "original_json": "{}",
     }
@@ -205,11 +206,13 @@ def test_sqlite_rejects_invalid_audit_rows(tmp_path, table, field, value):
             )
 
 
-def test_legacy_schema_upgrade_is_transactional(tmp_path):
+@pytest.mark.parametrize("legacy_version", [0, 1])
+def test_legacy_schema_upgrade_is_transactional(tmp_path, legacy_version):
     database_path = tmp_path / "legacy.sqlite3"
     with closing(sqlite3.connect(database_path)) as connection:
         connection.execute("CREATE TABLE pedidos (pedido_id INTEGER PRIMARY KEY, cliente TEXT)")
         connection.execute("INSERT INTO pedidos VALUES (1, 'Previous data')")
+        connection.execute(f"PRAGMA user_version = {legacy_version}")
         connection.commit()
     before = database_snapshot(database_path)
     write_dataset(tmp_path / "raw")
@@ -221,10 +224,10 @@ def test_legacy_schema_upgrade_is_transactional(tmp_path):
         save_sqlite(records, database_path)
     assert database_snapshot(database_path) == before
     with closing(sqlite3.connect(database_path)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == legacy_version
     clean_to_sqlite(input_path, database_path)
     with closing(sqlite3.connect(database_path)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute("UPDATE pedidos SET cliente = ''")
 

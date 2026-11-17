@@ -69,8 +69,13 @@ def test_error_counts_and_business_rules():
                 count / original_count * 100, 6
             )
         invalid_ids, empty_ids = set(), set()
+        customer_names = {}
         accepted_statuses = Counter()
         for row in rows[:original_count]:
+            assert 1 <= int(row["cliente_id"]) <= 120
+            customer_name = row["cliente"].strip()
+            assert customer_name == f"Cliente {int(row['cliente_id']):03d}"
+            assert customer_names.setdefault(row["cliente_id"], customer_name) == customer_name
             assert row["moneda"] == "USD"
             status = row["estado"].strip()
             assert status in ("pendiente", "completado", "cancelado")
