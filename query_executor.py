@@ -15,7 +15,13 @@ from errors import (
     SQLPolicyViolationError,
 )
 from schemas import QueryResponse
-from sql_policy import ALLOWED_FUNCTIONS, ALLOWED_RELATIONS, MAX_SQL_BYTES, validate_sql
+from sql_policy import (
+    ALLOWED_COLUMNS,
+    ALLOWED_FUNCTIONS,
+    ALLOWED_RELATIONS,
+    MAX_SQL_BYTES,
+    validate_sql,
+)
 
 
 ALLOWED_VIEWS = frozenset({"ventas_por_mes_pais", "top_10_clientes"})
@@ -62,7 +68,12 @@ class ReadOnlyAuthorizer:
             # SQLite reports database=None for COUNT(*) with no extracted column.
             main_database = database == "main" or (database is None and second == "")
             allowed_table = table in ALLOWED_RELATIONS if source is None else table == "pedidos"
-            if main_database and allowed_table:
+            # An empty column means a read with no extracted value, e.g. COUNT(*).
+            # Check actual source columns even when accessed through an allowed view.
+            allowed_column = second == "" or (
+                second is not None and second.lower() in ALLOWED_COLUMNS.get(table, ())
+            )
+            if main_database and allowed_table and allowed_column:
                 return sqlite3.SQLITE_OK
         self.denied = True
         return sqlite3.SQLITE_DENY

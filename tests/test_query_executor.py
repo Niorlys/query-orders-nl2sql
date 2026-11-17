@@ -141,6 +141,90 @@ def test_authorizer_blocks_access_even_without_ast_validator(database_path, sql)
         assert authorizer.denied
 
 
+@pytest.mark.parametrize("bypass_validator", [False, True])
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT original_json FROM pedidos ORDER BY pedido_id LIMIT 1",
+        "SELECT row_number FROM pedidos LIMIT 1",
+        "SELECT p.original_json AS cliente FROM pedidos p LIMIT 1",
+        'SELECT p."ORIGINAL_JSON" FROM "PEDIDOS" p LIMIT 1',
+        "SELECT * FROM pedidos LIMIT 1",
+        "SELECT p.* FROM pedidos p LIMIT 1",
+        "SELECT length(original_json) FROM pedidos LIMIT 1",
+        "SELECT COUNT(original_json) FROM pedidos",
+        "SELECT pedido_id FROM pedidos WHERE original_json LIKE '%audit-only-marker%'",
+        "SELECT pedido_id FROM pedidos ORDER BY row_number LIMIT 1",
+        "SELECT estado FROM pedidos GROUP BY estado HAVING MAX(row_number)>0",
+        "SELECT p.pedido_id FROM pedidos p JOIN pedidos q ON p.row_number=q.row_number",
+        "SELECT (SELECT original_json FROM pedidos LIMIT 1) AS value",
+        "SELECT s.value FROM (SELECT original_json AS value FROM pedidos) s",
+        "SELECT pedido_id FROM pedidos WHERE EXISTS (SELECT 1 FROM pedidos p WHERE p.row_number=2)",
+    ],
+)
+def test_private_columns_are_denied_in_every_read_context(database_path, sql, bypass_validator):
+    with closing(sqlite3.connect(database_path)) as connection:
+        connection.execute(
+            "UPDATE pedidos SET original_json=?", ('{"private":"audit-only-marker"}',)
+        )
+        connection.commit()
+    if bypass_validator:
+        with readonly_connection(database_path, ExecutionLimits()) as (connection, authorizer):
+            with pytest.raises(sqlite3.DatabaseError):
+                connection.execute(sql).fetchall()
+            assert authorizer.denied
+    else:
+        # The AST policy allows this syntax; SQLite must enforce column permissions.
+        assert validate_sql(sql) == sql
+        with pytest.raises(SQLPolicyViolationError):
+            execute_query(sql, database_path)
+
+
+@pytest.mark.parametrize("sql", ["SELECT internal_note FROM pedidos", "SELECT * FROM pedidos"])
+def test_new_table_columns_are_private_by_default(database_path, sql):
+    with closing(sqlite3.connect(database_path)) as connection:
+        connection.execute("ALTER TABLE pedidos ADD COLUMN internal_note TEXT DEFAULT 'private'")
+    with pytest.raises(SQLPolicyViolationError):
+        execute_query(sql, database_path)
+
+
+@pytest.mark.parametrize("view", ["ventas_por_mes_pais", "top_10_clientes"])
+@pytest.mark.parametrize(
+    ("definition", "column"),
+    [
+        ("SELECT original_json AS importe_total_centavos FROM pedidos", "importe_total_centavos"),
+        ("SELECT pedido_id AS internal_note FROM pedidos", "internal_note"),
+    ],
+)
+def test_allowed_views_cannot_expose_private_or_unlisted_columns(
+    database_path, view, definition, column
+):
+    with closing(sqlite3.connect(database_path)) as connection:
+        connection.execute(f"DROP VIEW {view}")
+        connection.execute(f"CREATE VIEW {view} AS {definition}")
+    sql = f"SELECT {column} FROM {view}"
+    with pytest.raises(SQLPolicyViolationError):
+        execute_query(sql, database_path)
+    with readonly_connection(database_path, ExecutionLimits()) as (connection, authorizer):
+        with pytest.raises(sqlite3.DatabaseError):
+            connection.execute(sql)
+        assert authorizer.denied
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected"),
+    [
+        ("SELECT COUNT(*) FROM pedidos", [[16]]),
+        ("SELECT COUNT(*) FROM ventas_por_mes_pais", [[4]]),
+        ("SELECT COUNT(*) FROM top_10_clientes", [[10]]),
+        ("SELECT cliente AS original_json FROM pedidos WHERE pedido_id=1", [["Ana"]]),
+        ("SELECT * FROM (SELECT cliente FROM pedidos WHERE pedido_id=1) p", [["Ana"]]),
+    ],
+)
+def test_column_policy_preserves_counts_and_public_aliases(database_path, sql, expected):
+    assert execute_query(sql, database_path).rows == expected
+
+
 def test_readonly_uri_prevents_writes_even_without_authorizer(database_path):
     with readonly_connection(database_path, ExecutionLimits()) as (connection, _):
         connection.set_authorizer(None)

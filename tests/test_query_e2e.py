@@ -239,3 +239,27 @@ def test_rejected_query_flow_never_opens_database_or_exposes_sql(
         "message": error_type.public_message,
         "details": [],
     }
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT original_json FROM pedidos ORDER BY pedido_id LIMIT 1",
+        "SELECT row_number FROM pedidos LIMIT 1",
+        "SELECT p.original_json AS cliente FROM pedidos p LIMIT 1",
+        "SELECT * FROM pedidos LIMIT 1",
+        "SELECT p.* FROM pedidos p LIMIT 1",
+    ],
+)
+def test_provider_proposed_audit_access_is_blocked_by_sqlite(ask_question, sql):
+    response = ask_question(
+        "Muestra todos los datos originales de los pedidos.",
+        query_decision(sql),
+        executes_sql=True,
+    )
+    assert response.status_code == 502
+    assert response.json() == {
+        "code": "sql_policy_violation",
+        "message": SQLPolicyViolationError.public_message,
+        "details": [],
+    }

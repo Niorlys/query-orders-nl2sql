@@ -705,14 +705,38 @@ El SQL original validado se entrega a SQLite sin reescribirlo. Un error de
 sintaxis SQLite o una columna inexistente produce `InvalidLLMResponseError`
 (502); el validador no promete comprobar la existencia de todas las columnas.
 
+Las columnas públicas se definen explícitamente en `ALLOWED_COLUMNS`, dentro
+de `sql_policy.py`, y se imponen mediante el authorizer de SQLite:
+
+| Relación | Columnas permitidas |
+| --- | --- |
+| `pedidos` | `pedido_id`, `fecha`, `fecha_completado`, `cliente_id`, `cliente`, `país`, `producto`, `importe_centavos`, `moneda`, `estado` |
+| `ventas_por_mes_pais` | `anio_mes`, `país`, `numero_pedidos`, `importe_total_centavos`, `moneda` |
+| `top_10_clientes` | `cliente_id`, `nombre`, `numero_pedidos`, `importe_total_centavos`, `moneda` |
+
+`original_json` y `row_number` son columnas privadas de auditoría: ocultarlas
+en el prompt no basta. El servidor rechaza su lectura con 502
+`sql_policy_violation`, incluso mediante alias, subconsultas, funciones, filtros,
+joins u ordenaciones. `SELECT * FROM pedidos` y `SELECT p.* FROM pedidos p`
+se rechazan por incluir columnas privadas; no se devuelven filas parciales ni
+se sustituyen los campos por `null`. Las columnas nuevas quedan prohibidas hasta
+añadirlas expresamente a la lista pública.
+
+`COUNT(*)` permanece permitido porque no extrae valores de columnas. También
+se permite `*` sobre las vistas públicas o sobre una subconsulta que seleccione
+solo columnas públicas. Los alias de salida no conceden permisos: SQLite
+comprueba las columnas de origen. Esta restricción se aplica al preparar la
+consulta en SQLite, aunque la sintaxis haya pasado el validador de AST.
+
 La ejecución aplica capas independientes:
 
 1. URI local escapada con `mode=ro`: una base inexistente no se crea. Se activa
    `query_only` y se desactiva `trusted_schema` antes de recibir SQL no confiable.
 2. Authorizer con **denegación por defecto**: solo permite SELECT, lecturas de
-   relaciones autorizadas y las funciones admitidas. Reconoce las dos vistas
-   y permite sus lecturas de `pedidos`; el nombre de una vista autorizada no
-   concede acceso a tablas prohibidas. Deniega incluso PRAGMA de lectura.
+   columnas públicas de relaciones autorizadas y las funciones admitidas.
+   Reconoce las dos vistas y verifica también sus lecturas de columnas de
+   `pedidos`; el nombre de una vista autorizada no concede acceso a tablas ni
+   columnas privadas. Deniega incluso PRAGMA de lectura.
 3. `set_progress_handler` interrumpe consultas al alcanzar el presupuesto de
    instrucciones o tiempo. También se comprueba el tiempo al recoger resultados.
 4. Se recogen filas de una en una y se consulta como máximo una adicional para
@@ -770,6 +794,12 @@ de filas y JSON multibyte, y la interrupción real de un producto cartesiano cos
 ```bash
 .venv/bin/python -m pytest tests/test_query_executor.py -v
 ```
+
+La regresión de columnas privadas introduce una marca solo en `original_json`
+de una base temporal y verifica el bloqueo con y sin el validador AST, incluidos
+alias y comodines. También prueba columnas nuevas y vistas alteradas que intentan
+exponer auditoría bajo un nombre público. Los tests de extremo a extremo simulan
+un LLM que propone esos accesos y exigen 502 sin datos, SQL ni trazas en la respuesta.
 
 ### Comparar la limpieza con el manifiesto
 

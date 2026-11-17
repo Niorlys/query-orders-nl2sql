@@ -7,7 +7,43 @@ from sqlglot.errors import SqlglotError
 from errors import SQLPolicyViolationError
 
 
-ALLOWED_RELATIONS = frozenset({"pedidos", "ventas_por_mes_pais", "top_10_clientes"})
+# Public business columns only. New physical columns remain private by default.
+# SQLite enforces this mapping after resolving aliases, stars and view dependencies.
+ALLOWED_COLUMNS = {
+    "pedidos": frozenset(
+        {
+            "pedido_id",
+            "fecha",
+            "fecha_completado",
+            "cliente_id",
+            "cliente",
+            "país",
+            "producto",
+            "importe_centavos",
+            "moneda",
+            "estado",
+        }
+    ),
+    "ventas_por_mes_pais": frozenset(
+        {
+            "anio_mes",
+            "país",
+            "numero_pedidos",
+            "importe_total_centavos",
+            "moneda",
+        }
+    ),
+    "top_10_clientes": frozenset(
+        {
+            "cliente_id",
+            "nombre",
+            "numero_pedidos",
+            "importe_total_centavos",
+            "moneda",
+        }
+    ),
+}
+ALLOWED_RELATIONS = frozenset(ALLOWED_COLUMNS)
 ALLOWED_FUNCTIONS = frozenset(
     {
         "count",
