@@ -36,10 +36,17 @@ def test_cli_persists_counts_audit_and_integer_amounts_idempotently(tmp_path):
     database_path = tmp_path / "processed" / "orders.sqlite3"
     original_bytes = input_path.read_bytes()
     expected = manifest["expected_after_deduplication"]
+    snapshots = []
     for _ in range(2):
         result = run_clean(input_path, database_path, tmp_path)
         assert result.returncode == 0, result.stderr
         assert "Conteos verificados en SQLite" in result.stdout
+        assert f"Filas leídas: {manifest['total_csv_row_count']}" in result.stdout
+        assert f"Cargadas (pedidos): {expected['accepted_order_count']}" in result.stdout
+        assert f"Duplicadas (pedidos_duplicados): {manifest['injection_counts']['duplicate']}" in result.stdout
+        assert f"Rechazadas (pedidos_rechazados): {expected['rejected_order_count']}" in result.stdout
+        assert "Motivos de rechazo" in result.stdout
+        assert "importe:missing_amount: 1" in result.stdout
         with closing(sqlite3.connect(database_path)) as connection:
             assert connection.execute("SELECT COUNT(*) FROM pedidos").fetchone()[0] == expected["accepted_order_count"]
             assert connection.execute("SELECT COUNT(*) FROM pedidos_rechazados").fetchone()[0] == expected["rejected_order_count"]
@@ -68,6 +75,8 @@ def test_cli_persists_counts_audit_and_integer_amounts_idempotently(tmp_path):
                             "SELECT duplicate_of FROM pedidos_duplicados WHERE row_number = ?",
                             (record.row_number,),
                         ).fetchone()[0] == record.duplicate_of
+        snapshots.append(database_snapshot(database_path))
+    assert snapshots[0] == snapshots[1]
     assert input_path.read_bytes() == original_bytes
 
 
@@ -142,3 +151,90 @@ def test_conflicts_and_extra_cells_are_preserved_in_rejections(tmp_path):
         ).fetchone()
         assert json.loads(original)["__extra_columns__"] == ["unexpected"]
         assert "row:unexpected_fields" in json.loads(reasons)
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("pedido_id", None), ("pedido_id", 0), ("pedido_id", -1), ("pedido_id", 1.5),
+    ("pedido_id", "invalid"), ("fecha", None), ("fecha", ""),
+    ("cliente", None), ("cliente", ""), ("cliente", " \t\n "),
+    ("producto", None), ("producto", ""), ("producto", "   "),
+    ("país", None), ("país", ""), ("país", "Unknown"),
+    ("importe_centavos", None), ("importe_centavos", 0), ("importe_centavos", -1),
+    ("importe_centavos", 1.5), ("importe_centavos", "invalid"),
+    ("estado", None), ("estado", "pagado"), ("moneda", None), ("moneda", "EUR"),
+    ("row_number", None), ("row_number", 1), ("row_number", 2.5),
+    ("original_json", None), ("original_json", ""),
+    ("fecha_completado", None), ("fecha_completado", "2024-12-31"),
+])
+def test_sqlite_rejects_invalid_orders_directly(tmp_path, field, value):
+    database_path = tmp_path / "orders.sqlite3"
+    save_sqlite([], database_path)
+    values = {
+        "pedido_id": 1, "fecha": "2025-01-01", "fecha_completado": "2025-01-02",
+        "cliente": "Cliente Uno", "país": "España", "producto": "Teclado",
+        "importe_centavos": 10000, "moneda": "USD", "estado": "completado",
+        "row_number": 2, "original_json": "{}",
+    }
+    values[field] = value
+    with closing(sqlite3.connect(database_path)) as connection:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                f"INSERT INTO pedidos ({', '.join(values)}) VALUES ({', '.join('?' for _ in values)})",
+                tuple(values.values()),
+            )
+        assert connection.execute("SELECT COUNT(*) FROM pedidos").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("table", ["pedidos_rechazados", "pedidos_duplicados"])
+@pytest.mark.parametrize(("field", "value"), [
+    ("row_number", None), ("row_number", 0), ("original_json", None),
+    ("normalized_json", None), ("reasons_json", None), ("reasons_json", ""),
+])
+def test_sqlite_rejects_invalid_audit_rows(tmp_path, table, field, value):
+    database_path = tmp_path / "orders.sqlite3"
+    save_sqlite([], database_path)
+    values = {"row_number": 3, "original_json": "{}", "normalized_json": "{}", "reasons_json": '["reason"]'}
+    if table == "pedidos_duplicados":
+        values["duplicate_of"] = 2
+    values[field] = value
+    with closing(sqlite3.connect(database_path)) as connection:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                f"INSERT INTO {table} ({', '.join(values)}) VALUES ({', '.join('?' for _ in values)})",
+                tuple(values.values()),
+            )
+
+
+def test_legacy_schema_upgrade_is_transactional(tmp_path):
+    database_path = tmp_path / "legacy.sqlite3"
+    with closing(sqlite3.connect(database_path)) as connection:
+        connection.execute("CREATE TABLE pedidos (pedido_id INTEGER PRIMARY KEY, cliente TEXT)")
+        connection.execute("INSERT INTO pedidos VALUES (1, 'Previous data')")
+        connection.commit()
+    before = database_snapshot(database_path)
+    write_dataset(tmp_path / "raw")
+    input_path = tmp_path / "raw" / "pedidos.csv"
+    records = classify_rows(read_csv_rows(input_path))
+    accepted = next(record for record in records if record.category == "accepted")
+    accepted.normalized["cliente"] = ""
+    with pytest.raises(sqlite3.IntegrityError):
+        save_sqlite(records, database_path)
+    assert database_snapshot(database_path) == before
+    with closing(sqlite3.connect(database_path)) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
+    clean_to_sqlite(input_path, database_path)
+    with closing(sqlite3.connect(database_path)) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute("UPDATE pedidos SET cliente = ''")
+
+
+@pytest.mark.parametrize("field", ["pedido_id", "row_number"])
+def test_sqlite_rejects_duplicate_identifiers(tmp_path, field):
+    write_dataset(tmp_path / "raw")
+    database_path = tmp_path / "orders.sqlite3"
+    clean_to_sqlite(tmp_path / "raw" / "pedidos.csv", database_path)
+    with closing(sqlite3.connect(database_path)) as connection:
+        values = connection.execute(f"SELECT {field} FROM pedidos ORDER BY pedido_id LIMIT 2").fetchall()
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(f"UPDATE pedidos SET {field} = ? WHERE {field} = ?", (values[0][0], values[1][0]))

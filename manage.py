@@ -32,9 +32,15 @@ def main() -> None:
         except (OSError, UnicodeError, csv.Error, sqlite3.Error, ValueError) as error:
             parser.exit(1, f"Error al limpiar/cargar pedidos: {error}\n")
         print(f"Filas leídas: {summary['total']}")
-        print(f"Aceptadas (pedidos): {summary['accepted']}")
+        print(f"Cargadas (pedidos): {summary['accepted']}")
         print(f"Duplicadas (pedidos_duplicados): {summary['duplicate']}")
         print(f"Rechazadas (pedidos_rechazados): {summary['rejected']}")
+        print("Motivos de rechazo (una fila puede tener varios):")
+        if summary["rejection_reasons"]:
+            for reason, count in summary["rejection_reasons"].items():
+                print(f"  {reason}: {count}")
+        else:
+            print("  Sin rechazos.")
         print(f"SQLite: {args.database.resolve()}")
         print("Conteos verificados en SQLite. Carga completada.")
 

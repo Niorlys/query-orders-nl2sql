@@ -128,9 +128,13 @@ El comando muestra los conteos y verifica que coincidan con los almacenados:
 
 ```text
 Filas leídas: 1544
-Aceptadas (pedidos): 1486
+Cargadas (pedidos): 1486
 Duplicadas (pedidos_duplicados): 36
 Rechazadas (pedidos_rechazados): 22
+Motivos de rechazo (una fila puede tener varios):
+  fecha:invalid_date: 18
+  fecha_completado:invalid_date: 3
+  importe:missing_amount: 1
 ```
 
 `storage.py` se encarga de leer el CSV y persistir los resultados. SQLite viene
@@ -147,6 +151,13 @@ Las tablas son:
 **Cada carga reemplaza el contenido de estas tres tablas** con el CSV indicado;
 no acumula ejecuciones ni conserva un historial de cargas. Se realiza en una
 transacción: si falla la escritura, los datos anteriores permanecen intactos.
+Las restricciones de SQLite exigen IDs positivos y únicos, campos obligatorios
+no nulos ni vacíos, céntimos enteros positivos, países del catálogo, moneda USD
+y estados permitidos. También comprueban la coherencia entre estado y fecha de
+finalización. Las filas de auditoría requieren número de fila válido y datos y
+motivos presentes. El esquema inicial de la demo se actualiza automáticamente
+en la primera carga con estas restricciones, dentro de la misma transacción;
+si falla, se recuperan tanto los datos como el esquema anterior.
 Repetir el comando con el mismo CSV no duplica pedidos. El CSV original no se
 modifica. Los directorios generados `data/raw/` y `data/processed/` están en
 `.gitignore` (esto no desversiona archivos que ya estuvieran registrados en Git).
@@ -260,6 +271,13 @@ y endpoint con LLM simulado acompañarán esas etapas cuando se implementen.
 `tests/test_storage.py` ejecuta la CLI contra bases temporales y comprueba
 persistencia, auditoría, céntimos enteros, repetición sin duplicados y rollback
 ante fallos de escritura, además de errores de entrada claros.
+También compara el contenido completo tras dos ejecuciones y prueba inserciones
+SQL directas inválidas para verificar las restricciones sin pasar por la limpieza.
+Puedes ejecutar solo estas pruebas con:
+
+```bash
+.venv/bin/python -m pytest tests/test_storage.py -v
+```
 
 ### Comparar la limpieza con el manifiesto
 

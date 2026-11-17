@@ -10,37 +10,39 @@ from cleaning import RAW_FIELDS, ClassifiedRow, classify_rows, summarize_rows
 
 
 DEFAULT_DATABASE_PATH = Path(__file__).resolve().parent / "data" / "processed" / "pedidos.sqlite3"
+SCHEMA_VERSION = 1
 SCHEMA_STATEMENTS = (
     """CREATE TABLE IF NOT EXISTS pedidos (
-        pedido_id INTEGER PRIMARY KEY CHECK (pedido_id > 0),
-        fecha TEXT NOT NULL,
+        pedido_id INTEGER NOT NULL PRIMARY KEY
+            CHECK (typeof(pedido_id) = 'integer' AND pedido_id > 0),
+        fecha TEXT NOT NULL CHECK (length(trim(fecha)) > 0),
         fecha_completado TEXT,
-        cliente TEXT NOT NULL,
-        país TEXT NOT NULL,
-        producto TEXT NOT NULL,
+        cliente TEXT NOT NULL CHECK (length(trim(cliente, char(9) || char(10) || char(13) || ' ')) > 0),
+        país TEXT NOT NULL CHECK (país IN ('España', 'México', 'Argentina', 'Colombia', 'Chile', 'Estados Unidos')),
+        producto TEXT NOT NULL CHECK (length(trim(producto, char(9) || char(10) || char(13) || ' ')) > 0),
         importe_centavos INTEGER NOT NULL
             CHECK (typeof(importe_centavos) = 'integer' AND importe_centavos > 0),
         moneda TEXT NOT NULL CHECK (moneda = 'USD'),
         estado TEXT NOT NULL CHECK (estado IN ('pendiente', 'completado', 'cancelado')),
-        row_number INTEGER NOT NULL UNIQUE,
-        original_json TEXT NOT NULL,
+        row_number INTEGER NOT NULL UNIQUE CHECK (typeof(row_number) = 'integer' AND row_number >= 2),
+        original_json TEXT NOT NULL CHECK (length(trim(original_json)) > 0),
         CHECK ((estado = 'completado' AND fecha_completado IS NOT NULL
                 AND fecha_completado >= fecha)
             OR (estado IN ('pendiente', 'cancelado') AND fecha_completado IS NULL))
-    )""",
+    ) WITHOUT ROWID""",
     """CREATE TABLE IF NOT EXISTS pedidos_rechazados (
-        row_number INTEGER PRIMARY KEY,
-        original_json TEXT NOT NULL,
-        normalized_json TEXT NOT NULL,
-        reasons_json TEXT NOT NULL
-    )""",
+        row_number INTEGER NOT NULL PRIMARY KEY CHECK (typeof(row_number) = 'integer' AND row_number >= 2),
+        original_json TEXT NOT NULL CHECK (length(trim(original_json)) > 0),
+        normalized_json TEXT NOT NULL CHECK (length(trim(normalized_json)) > 0),
+        reasons_json TEXT NOT NULL CHECK (length(trim(reasons_json)) > 0)
+    ) WITHOUT ROWID""",
     """CREATE TABLE IF NOT EXISTS pedidos_duplicados (
-        row_number INTEGER PRIMARY KEY,
-        original_json TEXT NOT NULL,
-        normalized_json TEXT NOT NULL,
-        reasons_json TEXT NOT NULL,
-        duplicate_of INTEGER NOT NULL CHECK (duplicate_of < row_number)
-    )""",
+        row_number INTEGER NOT NULL PRIMARY KEY CHECK (typeof(row_number) = 'integer' AND row_number >= 2),
+        original_json TEXT NOT NULL CHECK (length(trim(original_json)) > 0),
+        normalized_json TEXT NOT NULL CHECK (length(trim(normalized_json)) > 0),
+        reasons_json TEXT NOT NULL CHECK (length(trim(reasons_json)) > 0),
+        duplicate_of INTEGER NOT NULL CHECK (typeof(duplicate_of) = 'integer' AND duplicate_of >= 2 AND duplicate_of < row_number)
+    ) WITHOUT ROWID""",
 )
 
 
@@ -66,8 +68,17 @@ def save_sqlite(records: list[ClassifiedRow], database_path: Path) -> dict:
         with connection:
             # Explicit BEGIN also includes schema creation in the transaction.
             connection.execute("BEGIN IMMEDIATE")
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version not in (0, SCHEMA_VERSION):
+                raise ValueError(f"Versión de esquema SQLite no compatible: {version}")
+            if version == 0:
+                # Upgrade the earlier demo schema during the same full replacement.
+                connection.execute("DROP TABLE IF EXISTS pedidos_duplicados")
+                connection.execute("DROP TABLE IF EXISTS pedidos_rechazados")
+                connection.execute("DROP TABLE IF EXISTS pedidos")
             for statement in SCHEMA_STATEMENTS:
                 connection.execute(statement)
+            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             connection.execute("DELETE FROM pedidos_duplicados")
             connection.execute("DELETE FROM pedidos_rechazados")
             connection.execute("DELETE FROM pedidos")
